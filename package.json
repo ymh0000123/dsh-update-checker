@@ -1,0 +1,13 @@
+{
+  "name": "dsh-update-checker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH 更新检测动态插件：检测本机 DSH/@deepseek-ai 包（npm 源）与 GitHub 源包是否有更新，并支持一键更新 GitHub 依赖。",
+  "main": "src/host.js",
+  "exports": {
+    ".": "./src/host.js",
+    "./client": "./src/client.js"
+  },
+  "license": "MIT"
+}
