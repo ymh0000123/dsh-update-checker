@@ -298,8 +298,9 @@ return {
 
     let cache = null;
     let inflight = null;
+    let updateHandle = null;
     const progress = { active: false, phase: 'idle', current: 0, total: 0, message: '' };
-    const updateProgress = { active: false, name: '', startedAt: 0, line: '' };
+    const updateProgress = { active: false, name: '', startedAt: 0, line: '', cancelled: false };
 
     const doCheck = async () => {
       if (!sub) return { ok: false, error: 'subprocess 服务不可用（无法运行检测）' };
@@ -426,6 +427,15 @@ return {
       line: updateProgress.line,
     }));
 
+    harness.handle('cancel-update', async () => {
+      if (updateProgress.active && updateHandle) {
+        updateProgress.cancelled = true;
+        updateHandle.terminate();
+        return { ok: true, message: '已请求停止更新' };
+      }
+      return { ok: false, message: '当前没有正在进行的更新' };
+    });
+
     harness.handle('perform-update', async (args) => {
       try {
         const name = args && args.name;
@@ -463,6 +473,8 @@ return {
         updateProgress.name = name;
         updateProgress.startedAt = Date.now();
         updateProgress.line = '';
+        updateProgress.cancelled = false;
+        updateHandle = handle;
 
         let upOffset = 0;
         const drainUp = () => {
@@ -491,10 +503,15 @@ return {
           outcome = await handle.done;
           drainUp();
         } catch (e) {
+          updateHandle = null;
           updateProgress.active = false;
           return { ok: false, message: 'pnpm 启动失败: ' + String((e && e.message) || e) };
         }
+        updateHandle = null;
         updateProgress.active = false;
+        if (updateProgress.cancelled) {
+          return { ok: true, cancelled: true, message: '已停止 ' + name + ' 的更新' };
+        }
         const out = (handle.collected && handle.collected.stdout) ? handle.collected.stdout.readFrom(0).text : '';
         const err = (handle.collected && handle.collected.stderr) ? handle.collected.stderr.readFrom(0).text : '';
         if (outcome.exitCode !== 0) {
@@ -503,6 +520,7 @@ return {
         cache = null;
         return { ok: true, message: '已将 ' + name + ' 更新到最新 commit（重启 DSH 后完全生效）' };
       } catch (e) {
+        updateHandle = null;
         updateProgress.active = false;
         return { ok: false, message: String((e && e.message) || e) };
       }

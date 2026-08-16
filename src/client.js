@@ -29,6 +29,11 @@ function UpdateChecker(props) {
     setUpdateMsg(null)
     host.call('perform-update', { name }).then(
       (res) => {
+        if (res && res.cancelled) {
+          setUpdating((prev) => Object.assign({}, prev, { [name]: 'idle' }))
+          setUpdateMsg((res && res.message) || '已停止更新')
+          return
+        }
         const ok = !!(res && res.ok)
         setUpdating((prev) => Object.assign({}, prev, { [name]: ok ? 'done' : 'error' }))
         setUpdateMsg((res && res.message) || (ok ? '更新完成' : '更新失败'))
@@ -37,6 +42,13 @@ function UpdateChecker(props) {
         setUpdating((prev) => Object.assign({}, prev, { [name]: 'error' }))
         setUpdateMsg('更新失败：' + String((err && err.message) || err))
       },
+    )
+  }
+
+  const cancelUpdate = () => {
+    host.call('cancel-update').then(
+      (res) => setUpdateMsg((res && res.message) || '已请求停止更新'),
+      () => {},
     )
   }
 
@@ -179,7 +191,10 @@ function UpdateChecker(props) {
     if (p.kind === 'github-dep' && p.hasUpdate) {
       if (ustate === 'updating') {
         const sec = updProg && updProg.name === p.name ? Math.max(1, Math.round((updProg.elapsedMs || 0) / 1000)) : 0
-        actionEl = React.createElement('button', { className: 'upd-btn upd-btn-sm', disabled: true }, '更新中…' + (sec ? ' ' + sec + 's' : ''))
+        actionEl = React.createElement('span', { className: 'upd-actions' },
+          React.createElement('button', { className: 'upd-btn upd-btn-sm', disabled: true }, '更新中…' + (sec ? ' ' + sec + 's' : '')),
+          React.createElement('button', { className: 'upd-btn upd-btn-sm', onClick: cancelUpdate }, '停止'),
+        )
       } else if (ustate === 'done') actionEl = React.createElement('span', { className: 'upd-ok upd-small' }, '✓ 已更新')
       else if (ustate === 'error') actionEl = React.createElement('button', { className: 'upd-btn upd-btn-sm', onClick: () => runUpdate(p.name), title: updateMsg || '' }, '重试')
       else actionEl = React.createElement('button', { className: 'upd-btn upd-btn-sm', onClick: () => runUpdate(p.name) }, '更新')
@@ -319,6 +334,7 @@ return {
 .upd-msg { margin-top: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .upd-ok { color: var(--dsw-alias-state-success-primary); }
 .upd-small { font-size: 12px; }
+.upd-actions { display: inline-flex; gap: 6px; align-items: center; }
 .upd-progress { height: 8px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2); overflow: hidden; margin: 10px 0 6px; }
 .upd-progress-bar { height: 100%; border-radius: 999px; background: var(--dsw-alias-brand-primary); transition: width 0.2s ease; }
 .upd-progress-text { display: flex; align-items: center; gap: 10px; font-size: 12px; }
