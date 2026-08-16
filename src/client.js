@@ -1,4 +1,4 @@
-// Client half of the "DSH 更新检测" dynamic Cordis plugin (updt-1 / pkg-8).
+// Client half of the "DSH 更新检测" dynamic Cordis plugin (updt-1 / pkg-9).
 // This is the exact `code.client` body, wrapped as an ES module default export.
 // To load it as a dynamic plugin via cordis_define, use the function body
 // (the part inside `export default function () { ... }`) as code.client.
@@ -7,10 +7,12 @@ function UpdateChecker(props) {
   const timer = props && props.timer
   const [state, setState] = React.useState({ phase: 'loading', report: null, error: null })
   const [progress, setProgress] = React.useState(null)
-  const [filter, setFilter] = React.useState('all')
+  const [filter, setFilter] = React.useState('update')
+  const [gfilter, setGfilter] = React.useState('update')
   const [query, setQuery] = React.useState('')
   const [updating, setUpdating] = React.useState({})
   const [updateMsg, setUpdateMsg] = React.useState(null)
+  const [updProg, setUpdProg] = React.useState(null)
   const [collapsed, setCollapsed] = React.useState({ npm: false, github: false })
 
   const refresh = (force) => {
@@ -46,6 +48,9 @@ function UpdateChecker(props) {
       const dispose = timer.interval(() => {
         host.call('check-progress').then((p) => {
           if (p && typeof p === 'object' && p.active) setProgress(p)
+        }, () => {})
+        host.call('check-update-progress').then((p) => {
+          if (p && typeof p === 'object' && p.active) setUpdProg(p)
         }, () => {})
       }, 250)
       return () => dispose()
@@ -153,21 +158,29 @@ function UpdateChecker(props) {
     React.createElement('tbody', null, ...npmRows),
   )
 
-  const gBadges = []
-  gBadges.push(React.createElement('span', { className: 'upd-badge ' + (gs.updatable > 0 ? 'upd-badge-update' : 'upd-badge-ok'), key: 'gu' }, '可更新 ' + gs.updatable))
-  gBadges.push(React.createElement('span', { className: 'upd-badge upd-badge-ok', key: 'gt' }, '已最新 ' + gs.upToDate))
-  if (gs.failed > 0) gBadges.push(React.createElement('span', { className: 'upd-badge upd-badge-failed', key: 'gf' }, '失败 ' + gs.failed))
+  const gStatusOf = (p) => (p.error ? 'failed' : (p.hasUpdate ? 'update' : 'latest'))
+  const gCounts = { all: gpkgs.length, update: gs.updatable || 0, latest: gs.upToDate || 0, failed: gs.failed || 0 }
+  const gChips = ['all', 'update', 'latest', 'failed'].map((f) =>
+    React.createElement('button', {
+      key: 'g' + f,
+      className: 'upd-chip' + (gfilter === f ? ' upd-chip-active' : ''),
+      onClick: () => setGfilter(f),
+    }, (f === 'all' ? '全部' : STATUS[f].label) + ' ' + gCounts[f]),
+  )
+  const gShown = gpkgs.filter((p) => (gfilter === 'all' ? true : gStatusOf(p) === gfilter))
   const shortCommit = (c) => (c ? String(c).slice(0, 10) + '…' : '—')
-  const gRows = gpkgs.map((p, i) => {
-    const st = p.error ? 'failed' : (p.hasUpdate ? 'update' : 'latest')
+  const gRows = gShown.map((p, i) => {
+    const st = gStatusOf(p)
     const statusEl = p.error
       ? React.createElement('span', { className: 'upd-badge upd-badge-failed', title: String(p.error) }, '失败')
       : React.createElement('span', { className: 'upd-badge ' + STATUS[st].cls }, STATUS[st].label)
     const ustate = updating[p.name] || 'idle'
     let actionEl
     if (p.kind === 'github-dep' && p.hasUpdate) {
-      if (ustate === 'updating') actionEl = React.createElement('button', { className: 'upd-btn upd-btn-sm', disabled: true }, '更新中…')
-      else if (ustate === 'done') actionEl = React.createElement('span', { className: 'upd-ok upd-small' }, '✓ 已更新')
+      if (ustate === 'updating') {
+        const sec = updProg && updProg.name === p.name ? Math.max(1, Math.round((updProg.elapsedMs || 0) / 1000)) : 0
+        actionEl = React.createElement('button', { className: 'upd-btn upd-btn-sm', disabled: true }, '更新中…' + (sec ? ' ' + sec + 's' : ''))
+      } else if (ustate === 'done') actionEl = React.createElement('span', { className: 'upd-ok upd-small' }, '✓ 已更新')
       else if (ustate === 'error') actionEl = React.createElement('button', { className: 'upd-btn upd-btn-sm', onClick: () => runUpdate(p.name), title: updateMsg || '' }, '重试')
       else actionEl = React.createElement('button', { className: 'upd-btn upd-btn-sm', onClick: () => runUpdate(p.name) }, '更新')
     } else {
@@ -249,16 +262,17 @@ function UpdateChecker(props) {
     React.createElement('div', { className: 'upd-card' },
       React.createElement('div', { className: 'upd-section-head' },
         React.createElement('span', { className: 'upd-subtitle upd-mb0' }, 'GitHub 源包（' + gpkgs.length + '）'),
-        React.createElement('div', null,
-          ...gBadges,
-          React.createElement('button', { className: 'upd-chip', key: 'toggle', onClick: () => toggle('github') }, collapsed.github ? '展开 ▸' : '折叠 ▾'),
-        ),
+        React.createElement('button', { className: 'upd-chip', onClick: () => toggle('github') }, collapsed.github ? '展开 ▸' : '折叠 ▾'),
       ),
+      React.createElement('div', { className: 'upd-chips upd-mb' }, ...gChips),
       !collapsed.github ? React.createElement('div', null,
+        updProg && updProg.active
+          ? React.createElement('div', { className: 'upd-msg' }, '更新中 ' + updProg.name + ' ' + Math.max(1, Math.round((updProg.elapsedMs || 0) / 1000)) + 's' + (updProg.line ? ' · ' + updProg.line : ''))
+          : null,
         updateMsg ? React.createElement('div', { className: 'upd-msg' }, String(updateMsg)) : null,
         gRows.length > 0
           ? gTable
-          : React.createElement('div', { className: 'upd-muted upd-empty' }, '没有 GitHub 源包。'),
+          : React.createElement('div', { className: 'upd-muted upd-empty' }, '没有可显示的 GitHub 源包。'),
       ) : null,
     ),
   )

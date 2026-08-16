@@ -299,6 +299,7 @@ return {
     let cache = null;
     let inflight = null;
     const progress = { active: false, phase: 'idle', current: 0, total: 0, message: '' };
+    const updateProgress = { active: false, name: '', startedAt: 0, line: '' };
 
     const doCheck = async () => {
       if (!sub) return { ok: false, error: 'subprocess 服务不可用（无法运行检测）' };
@@ -418,6 +419,13 @@ return {
       message: progress.message,
     }));
 
+    harness.handle('check-update-progress', async () => ({
+      active: updateProgress.active,
+      name: updateProgress.name,
+      elapsedMs: updateProgress.active ? Date.now() - updateProgress.startedAt : 0,
+      line: updateProgress.line,
+    }));
+
     harness.handle('perform-update', async (args) => {
       try {
         const name = args && args.name;
@@ -450,12 +458,43 @@ return {
           },
           graceMs: 180000,
         });
+
+        updateProgress.active = true;
+        updateProgress.name = name;
+        updateProgress.startedAt = Date.now();
+        updateProgress.line = '';
+
+        let upOffset = 0;
+        const drainUp = () => {
+          const reader = handle.collected && handle.collected.stdout;
+          if (!reader) return;
+          let read;
+          try { read = reader.readFrom(upOffset); } catch (e) { return; }
+          upOffset = read.nextOffset;
+          if (!read.text) return;
+          const lines = String(read.text).split('\n');
+          for (const line of lines) {
+            const t = line.trim();
+            if (t.indexOf('Progress:') === 0) updateProgress.line = t;
+          }
+        };
+
         let outcome;
         try {
+          if (timer) {
+            for (;;) {
+              drainUp();
+              const r = await Promise.race([handle.done.then(() => 'done'), timer.timeout(200)]);
+              if (r === 'done') break;
+            }
+          }
           outcome = await handle.done;
+          drainUp();
         } catch (e) {
+          updateProgress.active = false;
           return { ok: false, message: 'pnpm 启动失败: ' + String((e && e.message) || e) };
         }
+        updateProgress.active = false;
         const out = (handle.collected && handle.collected.stdout) ? handle.collected.stdout.readFrom(0).text : '';
         const err = (handle.collected && handle.collected.stderr) ? handle.collected.stderr.readFrom(0).text : '';
         if (outcome.exitCode !== 0) {
@@ -464,6 +503,7 @@ return {
         cache = null;
         return { ok: true, message: '已将 ' + name + ' 更新到最新 commit（重启 DSH 后完全生效）' };
       } catch (e) {
+        updateProgress.active = false;
         return { ok: false, message: String((e && e.message) || e) };
       }
     });
