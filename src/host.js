@@ -381,8 +381,8 @@ return {
       }
     };
 
-    const runCheck = async () => {
-      if (cache && Date.now() - cache.at < 5 * 60 * 1000) return cache.report;
+    const runCheck = async (force) => {
+      if (!force && cache && Date.now() - cache.at < 5 * 60 * 1000) return cache.report;
       if (inflight) return inflight;
       inflight = (async () => {
         progress.active = true;
@@ -402,9 +402,9 @@ return {
       return inflight;
     };
 
-    harness.handle('check-updates', async () => {
+    harness.handle('check-updates', async (args) => {
       try {
-        return await runCheck();
+        return await runCheck(!!(args && args.force));
       } catch (e) {
         return { ok: false, error: String((e && e.message) || e) };
       }
@@ -477,7 +477,7 @@ return {
         render: (args, value) => [{ type: 'text', text: renderReport(value) }],
       },
       async execute() {
-        return await runCheck();
+        return await runCheck(true);
       },
     });
     harness.registerTool(ctx, tool);

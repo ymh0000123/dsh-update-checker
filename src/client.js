@@ -1,4 +1,4 @@
-// Client half of the "DSH 更新检测" dynamic Cordis plugin (updt-1 / pkg-7).
+// Client half of the "DSH 更新检测" dynamic Cordis plugin (updt-1 / pkg-8).
 // This is the exact `code.client` body, wrapped as an ES module default export.
 // To load it as a dynamic plugin via cordis_define, use the function body
 // (the part inside `export default function () { ... }`) as code.client.
@@ -11,11 +11,12 @@ function UpdateChecker(props) {
   const [query, setQuery] = React.useState('')
   const [updating, setUpdating] = React.useState({})
   const [updateMsg, setUpdateMsg] = React.useState(null)
+  const [collapsed, setCollapsed] = React.useState({ npm: false, github: false })
 
-  const refresh = () => {
+  const refresh = (force) => {
     setState({ phase: 'loading', report: state.report, error: null })
     setProgress({ active: true, phase: 'init', current: 0, total: 1, message: '正在启动检查…' })
-    host.call('check-updates').then(
+    host.call('check-updates', force ? { force: true } : {}).then(
       (report) => setState({ phase: 'done', report, error: null }),
       (err) => setState({ phase: 'done', report: null, error: String((err && err.message) || err) }),
     )
@@ -37,8 +38,10 @@ function UpdateChecker(props) {
     )
   }
 
+  const toggle = (which) => setCollapsed((prev) => Object.assign({}, prev, { [which]: !prev[which] }))
+
   React.useEffect(() => {
-    refresh()
+    refresh(false)
     if (timer) {
       const dispose = timer.interval(() => {
         host.call('check-progress').then((p) => {
@@ -59,7 +62,7 @@ function UpdateChecker(props) {
       React.createElement('div', { className: 'upd-card' },
         React.createElement('div', { className: 'upd-header' },
           React.createElement('span', null, '正在检查更新…'),
-          React.createElement('button', { className: 'upd-btn', onClick: refresh }, '重新检测'),
+          React.createElement('button', { className: 'upd-btn', onClick: () => refresh(true) }, '重新检测'),
         ),
         React.createElement('div', { className: 'upd-progress' },
           React.createElement('div', { className: 'upd-progress-bar', style: { width: pct + '%' } }),
@@ -78,7 +81,7 @@ function UpdateChecker(props) {
     return React.createElement('div', { className: 'upd-page' },
       React.createElement('div', { className: 'upd-card upd-error' },
         React.createElement('div', null, '更新检测失败：' + errMsg),
-        React.createElement('button', { className: 'upd-btn', onClick: refresh }, '重试'),
+        React.createElement('button', { className: 'upd-btn', onClick: () => refresh(true) }, '重试'),
       ),
     )
   }
@@ -86,6 +89,8 @@ function UpdateChecker(props) {
   const report = state.report || {}
   const s = report.summary || {}
   const pkgs = report.packages || []
+  const gpkgs = report.github || []
+  const gs = report.githubSummary || { total: gpkgs.length, updatable: 0, upToDate: 0, failed: 0 }
 
   const statusOf = (p) => {
     if (p.error) return 'failed'
@@ -148,8 +153,6 @@ function UpdateChecker(props) {
     React.createElement('tbody', null, ...npmRows),
   )
 
-  const gpkgs = report.github || []
-  const gs = report.githubSummary || { total: gpkgs.length, updatable: 0, upToDate: 0, failed: 0 }
   const gBadges = []
   gBadges.push(React.createElement('span', { className: 'upd-badge ' + (gs.updatable > 0 ? 'upd-badge-update' : 'upd-badge-ok'), key: 'gu' }, '可更新 ' + gs.updatable))
   gBadges.push(React.createElement('span', { className: 'upd-badge upd-badge-ok', key: 'gt' }, '已最新 ' + gs.upToDate))
@@ -193,6 +196,10 @@ function UpdateChecker(props) {
     React.createElement('tbody', null, ...gRows),
   )
 
+  const updAll = (s.updatable || 0) + (gs.updatable || 0)
+  const latestAll = (s.upToDate || 0) + (gs.upToDate || 0)
+  const failedAll = (s.failed || 0) + (gs.failed || 0)
+
   const rows = []
   rows.push(React.createElement('div', { className: 'upd-row', key: 'dsh' },
     React.createElement('span', { className: 'upd-name' }, 'DSH 发行版'),
@@ -206,12 +213,18 @@ function UpdateChecker(props) {
     React.createElement('span', { className: 'upd-name' }, '检查时间'),
     React.createElement('span', { className: 'upd-vers' }, String(report.checkedAt || '').replace('T', ' ').slice(0, 19)),
   ))
+  rows.push(React.createElement('div', { className: 'upd-row', key: 'sum' },
+    React.createElement('span', { className: 'upd-name' }, '汇总'),
+    React.createElement('span', { className: 'upd-vers upd-strong' },
+      '共 ' + (pkgs.length + gpkgs.length) + ' 项（npm ' + pkgs.length + ' + GitHub ' + gpkgs.length + '）｜可更新 ' + updAll + '（npm ' + (s.updatable || 0) + ' + GitHub ' + (gs.updatable || 0) + '）｜已最新 ' + latestAll + '｜失败 ' + failedAll,
+    ),
+  ))
 
   return React.createElement('div', { className: 'upd-page' },
     React.createElement('div', { className: 'upd-card' },
       React.createElement('div', { className: 'upd-header' },
         React.createElement('span', null, 'DSH 与 @deepseek-ai 包更新'),
-        React.createElement('button', { className: 'upd-btn', onClick: refresh }, '重新检测'),
+        React.createElement('button', { className: 'upd-btn', onClick: () => refresh(true) }, '重新检测'),
       ),
       ...rows,
     ),
@@ -219,21 +232,34 @@ function UpdateChecker(props) {
       React.createElement('div', { className: 'upd-chips' }, ...chips),
     ),
     React.createElement('div', { className: 'upd-card' },
-      React.createElement('div', { className: 'upd-toolbar' },
-        React.createElement('input', { className: 'upd-search', type: 'text', placeholder: '按包名搜索…', value: query, onChange: (e) => setQuery(e.target.value) }),
-        React.createElement('span', { className: 'upd-muted' }, '显示 ' + sorted.length + ' / ' + pkgs.length + ' 个包'),
+      React.createElement('div', { className: 'upd-section-head' },
+        React.createElement('span', { className: 'upd-subtitle upd-mb0' }, 'npm 包（' + pkgs.length + '）'),
+        React.createElement('button', { className: 'upd-chip', onClick: () => toggle('npm') }, collapsed.npm ? '展开 ▸' : '折叠 ▾'),
       ),
-      sorted.length > 0
-        ? npmTable
-        : React.createElement('div', { className: 'upd-muted upd-empty' }, '没有匹配的包。'),
+      !collapsed.npm ? React.createElement('div', null,
+        React.createElement('div', { className: 'upd-toolbar' },
+          React.createElement('input', { className: 'upd-search', type: 'text', placeholder: '按包名搜索…', value: query, onChange: (e) => setQuery(e.target.value) }),
+          React.createElement('span', { className: 'upd-muted' }, '显示 ' + sorted.length + ' / ' + pkgs.length + ' 个包'),
+        ),
+        sorted.length > 0
+          ? npmTable
+          : React.createElement('div', { className: 'upd-muted upd-empty' }, '没有匹配的包。'),
+      ) : null,
     ),
     React.createElement('div', { className: 'upd-card' },
-      React.createElement('div', { className: 'upd-subtitle' }, 'GitHub 源包'),
-      React.createElement('div', { className: 'upd-badges upd-mb' }, ...gBadges),
-      updateMsg ? React.createElement('div', { className: 'upd-msg' }, String(updateMsg)) : null,
-      gRows.length > 0
-        ? gTable
-        : React.createElement('div', { className: 'upd-muted upd-empty' }, '没有 GitHub 源包。'),
+      React.createElement('div', { className: 'upd-section-head' },
+        React.createElement('span', { className: 'upd-subtitle upd-mb0' }, 'GitHub 源包（' + gpkgs.length + '）'),
+        React.createElement('div', null,
+          ...gBadges,
+          React.createElement('button', { className: 'upd-chip', key: 'toggle', onClick: () => toggle('github') }, collapsed.github ? '展开 ▸' : '折叠 ▾'),
+        ),
+      ),
+      !collapsed.github ? React.createElement('div', null,
+        updateMsg ? React.createElement('div', { className: 'upd-msg' }, String(updateMsg)) : null,
+        gRows.length > 0
+          ? gTable
+          : React.createElement('div', { className: 'upd-muted upd-empty' }, '没有 GitHub 源包。'),
+      ) : null,
     ),
   )
 }
@@ -248,6 +274,8 @@ return {
 .upd-card { border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; padding: 12px 14px; background: var(--dsw-alias-bg-layer-1); }
 .upd-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 600; margin-bottom: 10px; }
 .upd-subtitle { font-weight: 600; margin-bottom: 8px; }
+.upd-mb0 { margin-bottom: 0; }
+.upd-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .upd-mb { margin-bottom: 10px; }
 .upd-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 4px 0; border-bottom: 1px dashed var(--dsw-alias-border-l1); }
 .upd-row:last-child { border-bottom: none; }
