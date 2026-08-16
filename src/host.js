@@ -294,6 +294,15 @@ async function mapLimit(items, limit, fn) {
 });
 `;
 
+const extractErr = (text) => {
+  if (!text) return '';
+  const lines = String(text).split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  if (lines.length === 0) return '';
+  const idx = lines.findIndex((l) => l.indexOf('ERR_') === 0 || l.indexOf('error') === 0 || l.indexOf('Error') === 0 || l.indexOf('ERROR') === 0);
+  if (idx >= 0) return lines.slice(idx, idx + 3).join(' | ').slice(0, 300);
+  return lines[0].slice(0, 200);
+};
+
 const renderReport = (value) => {
   if (!value || value.ok !== true) {
     return '更新检测失败: ' + ((value && value.error) || '未知错误');
@@ -550,7 +559,8 @@ return {
         const out = (handle.collected && handle.collected.stdout) ? handle.collected.stdout.readFrom(0).text : '';
         const err = (handle.collected && handle.collected.stderr) ? handle.collected.stderr.readFrom(0).text : '';
         if (outcome.exitCode !== 0) {
-          return { ok: false, message: '更新失败（退出码 ' + String(outcome.exitCode) + '）：' + String(err || out).slice(-400) };
+          const detail = extractErr(err) || extractErr(out) || '未知错误';
+          return { ok: false, message: '更新失败（退出码 ' + String(outcome.exitCode) + '）：' + detail + '。若是网络问题（github.com 连不上），网络恢复后重试' };
         }
         cache = null;
         return { ok: true, message: '已将 ' + name + ' 更新到最新 commit（重启 DSH 后完全生效）' };
