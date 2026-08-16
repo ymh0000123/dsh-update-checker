@@ -205,7 +205,10 @@ function UpdateChecker(props) {
       React.createElement('td', { className: 'upd-tname' }, p.name),
       React.createElement('td', { className: 'upd-repo' }, p.repo || '—'),
       React.createElement('td', null, shortCommit(p.installedCommit)),
-      React.createElement('td', null, shortCommit(p.latestCommit)),
+      React.createElement('td', null,
+        shortCommit(p.latestCommit),
+        p.via === 'api' ? React.createElement('span', { className: 'upd-muted upd-via', title: '经 GitHub API 获取（github.com 被阻断时自动回退）' }, 'API') : null,
+      ),
       React.createElement('td', null, statusEl),
       React.createElement('td', null, actionEl),
     )
@@ -335,6 +338,7 @@ return {
 .upd-ok { color: var(--dsw-alias-state-success-primary); }
 .upd-small { font-size: 12px; }
 .upd-actions { display: inline-flex; gap: 6px; align-items: center; }
+.upd-via { font-size: 10px; margin-left: 4px; opacity: 0.8; }
 .upd-progress { height: 8px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2); overflow: hidden; margin: 10px 0 6px; }
 .upd-progress-bar { height: 100%; border-radius: 999px; background: var(--dsw-alias-brand-primary); transition: width 0.2s ease; }
 .upd-progress-text { display: flex; align-items: center; gap: 10px; font-size: 12px; }

@@ -48,13 +48,35 @@ function readInstalledVersion(profileDir, name) {
   } catch (e) { return undefined; }
 }
 
-function gitRun(args) {
+function gitRun(args, timeoutMs) {
   return new Promise((resolve) => {
-    execFile('git', args, { encoding: 'utf8', timeout: 30000 }, (err, stdout, stderr) => {
+    execFile('git', args, { encoding: 'utf8', timeout: timeoutMs || 15000 }, (err, stdout, stderr) => {
       if (err) resolve({ error: String((stderr && stderr.trim()) || (err && err.message) || 'git failed') });
       else resolve({ output: String(stdout || '').trim() });
     });
   });
+}
+
+async function githubApiLatest(repo) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch('https://api.github.com/repos/' + repo + '/commits?per_page=1', {
+        headers: { 'User-Agent': 'dsh-update-checker', 'Accept': 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.ok) {
+        const arr = await res.json();
+        if (Array.isArray(arr) && arr.length > 0 && arr[0].sha) return { latest: arr[0].sha };
+        return { error: 'GitHub API 响应异常' };
+      }
+      lastErr = 'GitHub API HTTP ' + res.status;
+      if (res.status === 403 || res.status === 429) return { error: lastErr + '（限流）' };
+    } catch (e) {
+      lastErr = String((e && e.message) || e);
+    }
+  }
+  return { error: lastErr || 'GitHub API 请求失败' };
 }
 
 function emitProgress(phase, done, total, message) {
@@ -137,16 +159,29 @@ async function checkGithub(items) {
       emitProgress('github', done, total, p.repo + '（跳过）');
       return Object.assign({}, p, { hasUpdate: false, latestCommit: null });
     }
-    const r = await gitRun(['ls-remote', 'https://github.com/' + p.repo + '.git', 'HEAD']);
+    let latest = null;
+    let via = null;
+    let gitErr = null;
+    const r = await gitRun(['ls-remote', 'https://github.com/' + p.repo + '.git', 'HEAD'], 8000);
     if (r.error) {
-      done++;
-      emitProgress('github', done, total, p.repo + '（失败）');
-      return Object.assign({}, p, { hasUpdate: false, latestCommit: null, error: r.error });
+      gitErr = r.error;
+    } else {
+      const candidate = (r.output.split(/\s+/)[0] || '').trim();
+      if (candidate) { latest = candidate; via = 'git'; }
+      else gitErr = 'git ls-remote 无输出';
     }
-    const latest = (r.output.split(/\s+/)[0] || '').trim();
+    if (!latest) {
+      const api = await githubApiLatest(p.repo);
+      if (api.latest) { latest = api.latest; via = 'api'; gitErr = null; }
+      else if (api.error) gitErr = (gitErr ? gitErr + '；' : '') + api.error;
+    }
     done++;
-    emitProgress('github', done, total, p.repo);
-    return Object.assign({}, p, { latestCommit: latest, hasUpdate: !!latest && latest !== p.installedCommit });
+    if (!latest) {
+      emitProgress('github', done, total, p.repo + '（失败）');
+      return Object.assign({}, p, { hasUpdate: false, latestCommit: null, error: gitErr || '无法获取最新 commit' });
+    }
+    emitProgress('github', done, total, p.repo + (via === 'api' ? '（API）' : ''));
+    return Object.assign({}, p, { latestCommit: latest, hasUpdate: latest !== p.installedCommit, via });
   });
 }
 
