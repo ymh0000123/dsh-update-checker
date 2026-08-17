@@ -134,6 +134,21 @@ test('mounts, serves the local API and disposes', async () => {
   assert.equal(idleUpdate.active, false);
   assert.equal(idleUpdate.result, null);
 
+  // The supply-chain grant is planned by a read-only action, never applied here.
+  const noPlan = await invoke(route, { action: 'authorize-plan', name: 'not-a-real-package' });
+  assert.equal(noPlan.ok, false);
+
+  const candidate = (report.github || []).find((g) => g.kind === 'github-dep' && g.latestCommit);
+  if (candidate !== undefined) {
+    const plan = await invoke(route, { action: 'authorize-plan', name: candidate.name });
+    assert.equal(plan.ok, true, JSON.stringify(plan));
+    assert.equal(plan.commit, candidate.latestCommit);
+    assert.ok(plan.file.endsWith('pnpm-workspace.yaml'), plan.file);
+    assert.ok(plan.line.endsWith(': true'), plan.line);
+    assert.ok(plan.line.includes('codeload.github.com/' + candidate.repo + '/tar.gz/' + candidate.latestCommit), plan.line);
+    assert.equal(plan.spec, candidate.name + '@' + plan.tarball);
+  }
+
   const noCancel = await invoke(route, { action: 'cancel' });
   assert.equal(noCancel.ok, false);
 

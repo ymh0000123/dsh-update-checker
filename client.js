@@ -85,6 +85,16 @@ window.__ModuleLoader__.load({
 .uc-banner-err { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 40%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, transparent); }
 .uc-banner-err .uc-banner-t { color: var(--dsw-alias-state-error-primary); }
 .uc-x { border: none; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; flex: none; font-family: inherit; }
+.uc-banner-col { flex-direction: column; align-items: stretch; gap: 6px; }
+.uc-banner-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.uc-pre { margin: 5px 0 0; padding: 7px 9px; border-radius: 7px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--dsw-alias-label-primary); user-select: all; }
+.uc-grant { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 55%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 7%, transparent); font-size: 12px; }
+.uc-grant-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.uc-grant-t { font-weight: 600; color: var(--dsw-alias-state-warn-primary); font-size: 13px; }
+.uc-grant-b { color: var(--dsw-alias-label-secondary); line-height: 1.6; }
+.uc-grant-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; color: var(--dsw-alias-label-secondary); line-height: 1.6; }
+.uc-grant-warn { color: var(--dsw-alias-label-secondary); line-height: 1.6; padding-top: 2px; border-top: 1px dashed var(--dsw-alias-border-l1); }
+.uc-grant-acts { display: flex; justify-content: flex-end; gap: 8px; }
 .uc-spin { width: 12px; height: 12px; flex: none; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 28%, transparent); border-top-color: var(--dsw-alias-brand-primary); animation: uc-rot 0.7s linear infinite; box-sizing: border-box; }
 .uc-spin-sm { width: 10px; height: 10px; }
 @keyframes uc-rot { to { transform: rotate(360deg); } }
@@ -167,6 +177,8 @@ window.__ModuleLoader__.load({
 			const [updateMsg, setUpdateMsg] = React.useState(null);
 			const [updProg, setUpdProg] = React.useState(null);
 			const [collapsed, setCollapsed] = React.useState({ npm: false, github: false });
+			// Pending supply-chain grant shown for confirmation before anything is written.
+			const [grant, setGrant] = React.useState(null);
 
 			const fetchReport = () => {
 				if (local.fetching) return;
@@ -201,10 +213,11 @@ window.__ModuleLoader__.load({
 				return next;
 			});
 
-			const runUpdate = (name) => {
+			const runUpdate = (name, authorize) => {
 				setClicked((prev) => Object.assign({}, prev, { [name]: true }));
 				setUpdateMsg(null);
-				call({ action: "update", name: name }).then(
+				setGrant(null);
+				call(authorize ? { action: "update", name: name, authorize: true } : { action: "update", name: name }).then(
 					(res) => {
 						if (!res || res.ok !== true) {
 							clearClicked(name);
@@ -214,6 +227,25 @@ window.__ModuleLoader__.load({
 					(err) => {
 						clearClicked(name);
 						setUpdateMsg({ ok: false, text: "无法开始更新：" + String((err && err.message) || err) });
+					},
+				);
+			};
+
+			/** Ask the host what an authorized update would write, then show it. */
+			const openGrant = (name) => {
+				setGrant({ name: name, loading: true });
+				call({ action: "authorize-plan", name: name }).then(
+					(plan) => {
+						if (!plan || plan.ok !== true) {
+							setGrant(null);
+							setUpdateMsg({ ok: false, text: (plan && plan.message) || "无法读取授权信息" });
+							return;
+						}
+						setGrant(Object.assign({ loading: false }, plan));
+					},
+					(err) => {
+						setGrant(null);
+						setUpdateMsg({ ok: false, text: "无法读取授权信息：" + String((err && err.message) || err) });
 					},
 				);
 			};
@@ -473,11 +505,72 @@ window.__ModuleLoader__.load({
 					el("button", { className: "uc-btn uc-btn-sm", onClick: cancelUpdate, disabled: !!updProg.cancelling }, updProg.cancelling ? "停止中…" : "停止"),
 				);
 			} else if (updateMsg) {
-				banner = el("div", { className: "uc-banner " + (updateMsg.ok ? "uc-banner-ok" : "uc-banner-err") },
-					el("span", { className: "uc-banner-t" }, updateMsg.ok ? "✓ 完成" : "✕ 失败"),
-					el("span", { className: "uc-banner-d", title: String(updateMsg.text) }, String(updateMsg.text)),
-					el("button", { className: "uc-x", onClick: () => setUpdateMsg(null), title: "关闭" }, "×"),
+				const failed = lastResult && !lastResult.ok && lastResult.canAuthorize && !grant;
+				banner = el("div", { className: "uc-banner uc-banner-col " + (updateMsg.ok ? "uc-banner-ok" : "uc-banner-err") },
+					el("div", { className: "uc-banner-row" },
+						el("span", { className: "uc-banner-t" }, updateMsg.ok ? "✓ 完成" : "✕ 失败"),
+						el("span", { className: "uc-banner-d", title: String(updateMsg.text) }, String(updateMsg.text).split("\n")[0]),
+						failed ? el("button", {
+							className: "uc-btn uc-btn-sm uc-btn-warn",
+							onClick: () => openGrant(lastResult.name),
+						}, "授权构建并更新…") : null,
+						el("button", { className: "uc-x", onClick: () => { setUpdateMsg(null); setGrant(null); }, title: "关闭" }, "×"),
+					),
+					String(updateMsg.text).indexOf("\n") >= 0
+						? el("pre", { className: "uc-pre" }, String(updateMsg.text).split("\n").slice(1).join("\n").trim())
+						: null,
 				);
+			}
+
+			// Informed consent: nothing is written until 确认授权 is pressed.
+			let grantPanel = null;
+			if (grant) {
+				if (grant.loading) {
+					grantPanel = el("div", { className: "uc-grant" },
+						el("span", { className: "uc-spin" }),
+						el("span", { className: "uc-dim" }, "正在读取授权信息…"),
+					);
+				} else {
+					grantPanel = el("div", { className: "uc-grant" },
+						el("div", { className: "uc-grant-head" },
+							el("span", { className: "uc-grant-t" }, "授权 " + grant.name + " 执行构建脚本"),
+							el("button", { className: "uc-x", onClick: () => setGrant(null), title: "取消" }, "×"),
+						),
+						el("div", { className: "uc-grant-b" },
+							"这类包不在仓库里放编译产物，安装时可能要运行它自己的构建脚本；DSH 的 allowBuilds 白名单按「包名@精确 tarball」授权，所以每个新 commit 都要你确认一次。点确认后按顺序做两步：",
+						),
+						el("ol", { className: "uc-grant-list" },
+							el("li", null,
+								"执行 ",
+								el("span", { className: "uc-code" }, "pnpm add " + String(grant.spec)),
+								" —— 固定 commit 的 codeload tarball，不经过被封锁的 github.com git 通道。",
+							),
+							el("li", null,
+								"仅当 pnpm 因构建脚本被拦时，才往 ",
+								el("span", { className: "uc-code" }, String(grant.file)),
+								" 的 allowBuilds ",
+								grant.replaces && grant.replaces.length > 0 ? "用这一行替换该包的旧授权" : "写入这一行",
+								"（不需要构建的包不会写入任何授权）：",
+								el("pre", { className: "uc-pre" }, String(grant.line)),
+								grant.replaces && grant.replaces.length > 0
+									? el("div", { className: "uc-dim" }, "将被替换：" + grant.replaces.join(" / "))
+									: null,
+								grant.alreadyAllowed ? el("div", { className: "uc-dim" }, "（该 commit 已在白名单中，无需改动）") : null,
+							),
+						),
+						el("div", { className: "uc-grant-warn" },
+							"副作用：package.json 中该依赖会固定为这个 commit。github.com 恢复后可用 ",
+							el("span", { className: "uc-code" }, "dsh plugin --profile web add github:" + String(grant.repo)),
+							" 还原为跟随最新。",
+						),
+						el("div", { className: "uc-grant-acts" },
+							el("button", { className: "uc-btn uc-btn-sm", onClick: () => setGrant(null) }, "取消"),
+							el("button", { className: "uc-btn uc-btn-sm uc-btn-warn", onClick: () => runUpdate(grant.name, true) },
+								"确认授权并更新 " + String(grant.commit || "").slice(0, 7),
+							),
+						),
+					);
+				}
 			}
 
 			return el("div", { className: "uc-root" },
@@ -496,6 +589,7 @@ window.__ModuleLoader__.load({
 				),
 				busy ? progressBlock : null,
 				banner,
+				grantPanel,
 				stats,
 				el("div", { className: "uc-meta" },
 					el("span", { className: "uc-meta-k" }, "Profile"),

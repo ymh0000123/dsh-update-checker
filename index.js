@@ -21,6 +21,7 @@ const { createRequire } = require('node:module');
 const { pathToFileURL } = require('node:url');
 const { runCheck, renderReport, findProfile } = require('./lib/check.js');
 const { classifyPnpmFailure } = require('./lib/pnpm-error.js');
+const { planAuthorization, authorizeBuild } = require('./lib/workspace-policy.js');
 
 const NAME = 'dsh-update-checker';
 const API_PATH = '/dsh-update-checker/api';
@@ -106,7 +107,7 @@ async function apply(ctx) {
   let updateTimer = null;
 
   const progress = { active: false, phase: 'idle', current: 0, total: 0, message: '' };
-  const updateState = { active: false, name: '', startedAt: 0, line: '', cancelled: false, result: null };
+  const updateState = { active: false, name: '', startedAt: 0, line: '', cancelled: false, authorized: false, result: null };
 
   // ---- detection ---------------------------------------------------------
 
@@ -164,7 +165,46 @@ async function apply(ctx) {
     }
   };
 
-  const startUpdate = (name) => {
+  /** Describe the supply-chain grant an authorized update would write. */
+  const authorizePlan = (name) => {
+    if (typeof name !== 'string' || !SAFE_NAME.test(name)) return { ok: false, message: '包名无效' };
+    const report = cache && cache.report;
+    const profileDir = report && report.profilePath;
+    if (!profileDir) return { ok: false, message: '未找到 profile 目录，请先执行一次检测' };
+    const gpkg = ((report && report.github) || []).find((p) => p.name === name);
+    if (!gpkg) return { ok: false, message: '未找到该 GitHub 源包：' + name };
+    if (gpkg.kind !== 'github-dep') return { ok: false, message: '该包为本地 link 安装，请手动在仓库目录执行 git pull' };
+    if (!gpkg.latestCommit) return { ok: false, message: '还不知道该包的最新 commit，请先重新检测' };
+    const plan = planAuthorization({ profileDir, name, repo: gpkg.repo, sha: gpkg.latestCommit });
+    return {
+      ok: plan.ok,
+      message: plan.error,
+      name,
+      repo: gpkg.repo,
+      commit: gpkg.latestCommit,
+      installedCommit: gpkg.installedCommit || null,
+      file: plan.file,
+      line: plan.key + ': true',
+      tarball: plan.tarball,
+      alreadyAllowed: plan.alreadyAllowed,
+      replaces: plan.replaces,
+      spec: name + '@' + plan.tarball,
+    };
+  };
+
+  /**
+   * Start an update.
+   *
+   * Plain mode runs `pnpm update <name>`: it keeps the `github:` shorthand, but
+   * needs github.com's git channel to resolve and fetch the commit.
+   *
+   * Authorized mode is the escalation the panel makes the user confirm. It
+   * installs the pinned codeload tarball, which needs no git channel — and only
+   * if pnpm then refuses because the commit may not run its build scripts does
+   * it write the allowBuilds grant and retry. A package that needs no build
+   * therefore never gets a needless policy grant.
+   */
+  const startUpdate = (name, authorize) => {
     if (typeof name !== 'string' || !SAFE_NAME.test(name)) return { ok: false, message: '包名无效' };
     if (updateState.active) return { ok: false, message: '已有更新正在进行：' + updateState.name };
     const report = cache && cache.report;
@@ -174,75 +214,116 @@ async function apply(ctx) {
     if (!gpkg) return { ok: false, message: '未找到该 GitHub 源包：' + name };
     if (gpkg.kind !== 'github-dep') return { ok: false, message: '该包为本地 link 安装，请手动在仓库目录执行 git pull' };
     if (!gpkg.hasUpdate) return { ok: false, message: '该包已是最新，无需更新' };
-
-    let child;
-    try {
-      child = spawn('pnpm', ['update', name], { cwd: profileDir, shell: true, windowsHide: true });
-    } catch (e) {
-      return { ok: false, message: 'pnpm 启动失败: ' + String((e && e.message) || e) };
-    }
+    if (authorize === true && !gpkg.latestCommit) return { ok: false, message: '还不知道该包的最新 commit，请先重新检测' };
 
     const startedAt = Date.now();
     updateState.active = true;
     updateState.name = name;
     updateState.startedAt = startedAt;
-    updateState.line = '';
+    updateState.line = authorize === true ? '正在安装固定 commit…' : '';
     updateState.cancelled = false;
     updateState.result = null;
-    updateChild = child;
-
-    let out = '';
-    let err = '';
-    const track = (chunk) => {
-      for (const line of String(chunk).split('\n')) {
-        const t = line.trim();
-        if (t.indexOf('Progress:') === 0 || t.indexOf('Packages:') === 0 || t.indexOf('Already up to date') === 0) {
-          updateState.line = t.slice(0, 200);
-        }
-      }
-    };
-    if (child.stdout) {
-      child.stdout.setEncoding('utf8');
-      child.stdout.on('data', (chunk) => {
-        if (out.length < 300 * 1024) out += chunk;
-        track(chunk);
-      });
-    }
-    if (child.stderr) {
-      child.stderr.setEncoding('utf8');
-      child.stderr.on('data', (chunk) => {
-        if (err.length < 100 * 1024) err += chunk;
-        track(chunk);
-      });
-    }
+    updateState.authorized = false;
+    updateChild = null;
 
     updateTimer = setTimeout(() => {
       updateState.cancelled = true;
       updateState.line = '超时，正在终止…';
-      killTree(child);
+      if (updateChild) killTree(updateChild);
     }, UPDATE_TIMEOUT_MS);
     if (updateTimer.unref) updateTimer.unref();
 
-    child.on('error', (e) => {
-      finishUpdate(name, startedAt, { ok: false, message: 'pnpm 执行失败: ' + String((e && e.message) || e) });
+    /** Run one pnpm invocation, streaming its progress line into updateState. */
+    const runPnpm = (argv) => new Promise((resolve) => {
+      let child;
+      try {
+        child = spawn('pnpm', argv, { cwd: profileDir, shell: true, windowsHide: true });
+      } catch (e) {
+        resolve({ spawnError: String((e && e.message) || e) });
+        return;
+      }
+      updateChild = child;
+      let out = '';
+      let err = '';
+      const track = (chunk) => {
+        for (const line of String(chunk).split('\n')) {
+          const t = line.trim();
+          if (t.indexOf('Progress:') === 0 || t.indexOf('Packages:') === 0 || t.indexOf('Already up to date') === 0) {
+            updateState.line = t.slice(0, 200);
+          }
+        }
+      };
+      if (child.stdout) {
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', (chunk) => {
+          if (out.length < 300 * 1024) out += chunk;
+          track(chunk);
+        });
+      }
+      if (child.stderr) {
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', (chunk) => {
+          if (err.length < 100 * 1024) err += chunk;
+          track(chunk);
+        });
+      }
+      let settled = false;
+      const settle = (value) => {
+        if (settled) return;
+        settled = true;
+        updateChild = null;
+        resolve(value);
+      };
+      child.on('error', (e) => settle({ spawnError: String((e && e.message) || e) }));
+      child.on('close', (code) => settle({ code, out, err }));
     });
 
-    child.on('close', (code) => {
-      if (updateState.result !== null && updateState.result.name === name && !updateState.active) return;
+    (async () => {
+      const tarball = gpkg.latestCommit ? 'https://codeload.github.com/' + gpkg.repo + '/tar.gz/' + gpkg.latestCommit : null;
+      let granted = false;
+      let attempt = authorize === true
+        ? await runPnpm(['add', name + '@' + tarball])
+        : await runPnpm(['update', name]);
+
+      // The one place a policy grant is written: pnpm just said this commit is
+      // not allowed to build, and the user already confirmed that exact line.
+      if (authorize === true && !updateState.cancelled && attempt.code !== 0 && attempt.spawnError === undefined) {
+        const failure = classifyPnpmFailure({ stdout: attempt.out, stderr: attempt.err, code: attempt.code, name });
+        if (failure.kind === 'allow-builds') {
+          const grant = authorizeBuild({ profileDir, name, repo: gpkg.repo, sha: gpkg.latestCommit });
+          if (!grant.ok) {
+            finishUpdate(name, startedAt, { ok: false, kind: 'allow-builds', message: grant.error || '写入 allowBuilds 失败' });
+            return;
+          }
+          granted = true;
+          updateState.authorized = true;
+          updateState.line = '已授权构建，正在重新安装…';
+          attempt = await runPnpm(['add', name + '@' + tarball]);
+        }
+      }
+
       if (updateState.cancelled) {
         finishUpdate(name, startedAt, { ok: false, cancelled: true, message: '已停止 ' + name + ' 的更新' });
         return;
       }
-      if (code !== 0) {
-        const failure = classifyPnpmFailure({ stdout: out, stderr: err, code, name });
+      if (attempt.spawnError !== undefined) {
+        finishUpdate(name, startedAt, { ok: false, message: 'pnpm 执行失败: ' + attempt.spawnError });
+        return;
+      }
+      if (attempt.code !== 0) {
+        const failure = classifyPnpmFailure({ stdout: attempt.out, stderr: attempt.err, code: attempt.code, name });
         finishUpdate(name, startedAt, {
           ok: false,
           kind: failure.kind,
           detail: failure.detail,
           message: failure.message,
+          // A build-script block or a dead git channel is fixable from the panel
+          // by granting this one commit; anything else is not.
+          canAuthorize: authorize !== true && (failure.kind === 'allow-builds' || failure.kind === 'github-git-unreachable'),
         });
         return;
       }
+
       // Keep the cached report consistent so the row stops offering the update.
       if (gpkg.latestCommit) {
         gpkg.installedCommit = gpkg.latestCommit;
@@ -253,8 +334,18 @@ async function apply(ctx) {
           gs.upToDate = (gs.upToDate || 0) + 1;
         }
       }
-      finishUpdate(name, startedAt, { ok: true, message: '已将 ' + name + ' 更新到最新 commit（重启 DSH 后完全生效）' });
-    });
+      const short = String(gpkg.latestCommit || '').slice(0, 7);
+      let message;
+      if (authorize !== true) {
+        message = '已将 ' + name + ' 更新到最新 commit（重启 DSH 后完全生效）';
+      } else {
+        message = (granted ? '已授权构建并把 ' : '已把 ') + name + ' 更新到 ' + short
+          + '（重启 DSH 后完全生效）。该依赖现已固定为此 commit；github.com 的 git 通道恢复后可用 '
+          + 'dsh plugin --profile web add github:' + gpkg.repo + ' 还原为跟随最新。'
+          + (granted ? '' : ' 该包无需构建脚本，因此没有写入任何 allowBuilds 授权。');
+      }
+      finishUpdate(name, startedAt, { ok: true, authorized: granted, pinned: authorize === true, message });
+    })();
 
     return { ok: true, started: true, name };
   };
@@ -275,13 +366,15 @@ async function apply(ctx) {
       };
     }
     if (action === 'report') return cache ? cache.report : null;
-    if (action === 'update') return startUpdate(args && args.name);
+    if (action === 'update') return startUpdate(args && args.name, !!(args && args.authorize));
+    if (action === 'authorize-plan') return authorizePlan(args && args.name);
     if (action === 'update-progress') {
       return {
         active: updateState.active,
         name: updateState.name,
         elapsedMs: updateState.active ? Date.now() - updateState.startedAt : 0,
         line: updateState.line,
+        authorized: !!updateState.authorized,
         cancelling: !!(updateState.active && updateState.cancelled),
         result: updateState.result,
       };
