@@ -289,7 +289,7 @@ async function apply(ctx) {
       // not allowed to build, and the user already confirmed that exact line.
       if (authorize === true && !updateState.cancelled && attempt.code !== 0 && attempt.spawnError === undefined) {
         const failure = classifyPnpmFailure({ stdout: attempt.out, stderr: attempt.err, code: attempt.code, name });
-        if (failure.kind === 'allow-builds') {
+        if (failure.kind === 'allow-builds' || failure.kind === 'ignored-build-scripts') {
           const grant = authorizeBuild({ profileDir, name, repo: gpkg.repo, sha: gpkg.latestCommit });
           if (!grant.ok) {
             finishUpdate(name, startedAt, { ok: false, kind: 'allow-builds', message: grant.error || '写入 allowBuilds 失败' });
@@ -319,7 +319,8 @@ async function apply(ctx) {
           message: failure.message,
           // A build-script block or a dead git channel is fixable from the panel
           // by granting this one commit; anything else is not.
-          canAuthorize: authorize !== true && (failure.kind === 'allow-builds' || failure.kind === 'github-git-unreachable'),
+          canAuthorize: authorize !== true
+            && (failure.kind === 'allow-builds' || failure.kind === 'ignored-build-scripts' || failure.kind === 'github-git-unreachable'),
         });
         return;
       }

@@ -69,6 +69,27 @@ test('classifies the allowBuilds supply-chain block and quotes the exact key', (
   assert.ok(!r.message.includes('网络恢复后重试'), 'a policy block must not tell the user to wait for the network: ' + r.message);
 });
 
+test('classifies a skipped build script (allowlist entry not true)', () => {
+  // pnpm prints this inside a box-drawing warning frame and still exits 1.
+  const IGNORED = [
+    '✓ Lockfile passes supply-chain policies (verified 2m ago)',
+    'Progress: resolved 30, reused 3, downloaded 0, added 0',
+    '╭ Warning ─────────────────────────────────────────────────────────────────────╮',
+    '│                                                                              │',
+    '│   Ignored build scripts: dsh-better-sidebar@https://codeload.github.com/omd  │',
+    '│   Run "pnpm approve-builds" to pick which dependencies should be allowed     │',
+    '│   to run scripts.                                                            │',
+    '╰──────────────────────────────────────────────────────────────────────────────╯',
+  ].join('\n');
+  const r = classifyPnpmFailure({ stdout: IGNORED, stderr: '', code: 1, name: 'dsh-better-sidebar' });
+  assert.equal(r.kind, 'ignored-build-scripts');
+  assert.ok(r.message.includes('构建脚本被跳过'), r.message);
+  assert.ok(r.message.includes('allowBuilds'), r.message);
+  assert.ok(!r.message.includes('Lockfile passes'), 'success chatter leaked: ' + r.message);
+  assert.ok(r.message.indexOf('╭') < 0 && r.message.indexOf('│') < 0, 'box borders leaked: ' + r.message);
+  assert.ok(!r.message.includes('网络恢复后重试'), 'a policy problem must not be blamed on the network: ' + r.message);
+});
+
 test('falls back to the first real cause for an unknown failure', () => {
   const r = classifyPnpmFailure({
     stdout: '✓ Lockfile passes supply-chain policies (verified 1m ago)\nProgress: resolved 3\n',

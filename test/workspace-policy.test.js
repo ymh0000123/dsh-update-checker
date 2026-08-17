@@ -137,6 +137,43 @@ test('a grant for one package never touches another package grant', () => {
   cleanup(dir);
 });
 
+test('replaces pnpm\'s "set this to true or false" placeholder instead of duplicating it', () => {
+  // pnpm rewrites a decided grant back to this placeholder when it wants the
+  // user to choose again; an entry matcher that only accepts `: true` would
+  // leave the placeholder behind and append a second entry.
+  const dir = makeProfile([
+    'allowBuilds:',
+    '  koffi: true',
+    '  ' + NAME + '@' + tarballUrl(REPO, OLD) + ': set this to true or false',
+    '  protobufjs: true',
+  ]);
+
+  const plan = planAuthorization({ profileDir: dir, name: NAME, repo: REPO, sha: OLD });
+  assert.equal(plan.alreadyAllowed, false, 'a placeholder is not a grant');
+  assert.deepEqual(plan.replaces, [NAME + '@' + tarballUrl(REPO, OLD) + ': set this to true or false']);
+
+  const result = authorizeBuild({ profileDir: dir, name: NAME, repo: REPO, sha: OLD });
+  assert.equal(result.changed, true);
+  const lines = read(dir).split('\n');
+  assert.equal(lines.filter((l) => l.includes(NAME + '@')).length, 1, 'exactly one entry for the package');
+  assert.equal(read(dir).includes('set this to true or false'), false, 'placeholder must be gone');
+  assert.ok(read(dir).includes('  ' + allowKey(NAME, REPO, OLD) + ': true'));
+  assert.ok(read(dir).includes('  koffi: true') && read(dir).includes('  protobufjs: true'));
+  cleanup(dir);
+});
+
+test('replaces a false entry too', () => {
+  const dir = makeProfile(['allowBuilds:', '  ' + NAME + '@' + tarballUrl(REPO, NEW) + ': false']);
+  const plan = planAuthorization({ profileDir: dir, name: NAME, repo: REPO, sha: NEW });
+  assert.equal(plan.alreadyAllowed, false);
+  assert.equal(plan.replaces.length, 1);
+  authorizeBuild({ profileDir: dir, name: NAME, repo: REPO, sha: NEW });
+  const entries = read(dir).split('\n').filter((l) => l.includes(NAME + '@'));
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].trim(), allowKey(NAME, REPO, NEW) + ': true');
+  cleanup(dir);
+});
+
 test('refuses to plan or write without a repo and commit', () => {
   const dir = makeProfile(FULL_BLOCK);
   const before = read(dir);

@@ -87,6 +87,10 @@ window.__ModuleLoader__.load({
 .uc-x { border: none; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; flex: none; font-family: inherit; }
 .uc-banner-col { flex-direction: column; align-items: stretch; gap: 6px; }
 .uc-banner-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.uc-flex1 { flex: 1; min-width: 0; }
+.uc-banner-full { color: var(--dsw-alias-label-secondary); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.uc-det { font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.uc-det summary { cursor: pointer; opacity: 0.8; }
 .uc-pre { margin: 5px 0 0; padding: 7px 9px; border-radius: 7px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--dsw-alias-label-primary); user-select: all; }
 .uc-grant { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 55%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 7%, transparent); font-size: 12px; }
 .uc-grant-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -506,18 +510,29 @@ window.__ModuleLoader__.load({
 				);
 			} else if (updateMsg) {
 				const failed = lastResult && !lastResult.ok && lastResult.canAuthorize && !grant;
+				const text = String(updateMsg.text);
+				const nl = text.indexOf("\n");
+				const head = nl >= 0 ? text.slice(0, nl) : text;
+				const rest = nl >= 0 ? text.slice(nl + 1).trim() : "";
 				banner = el("div", { className: "uc-banner uc-banner-col " + (updateMsg.ok ? "uc-banner-ok" : "uc-banner-err") },
 					el("div", { className: "uc-banner-row" },
 						el("span", { className: "uc-banner-t" }, updateMsg.ok ? "✓ 完成" : "✕ 失败"),
-						el("span", { className: "uc-banner-d", title: String(updateMsg.text) }, String(updateMsg.text).split("\n")[0]),
+						el("span", { className: "uc-flex1" }),
 						failed ? el("button", {
 							className: "uc-btn uc-btn-sm uc-btn-warn",
 							onClick: () => openGrant(lastResult.name),
 						}, "授权构建并更新…") : null,
 						el("button", { className: "uc-x", onClick: () => { setUpdateMsg(null); setGrant(null); }, title: "关闭" }, "×"),
 					),
-					String(updateMsg.text).indexOf("\n") >= 0
-						? el("pre", { className: "uc-pre" }, String(updateMsg.text).split("\n").slice(1).join("\n").trim())
+					// The whole reason is shown: a clipped one-liner is what made the
+					// earlier failures unreadable.
+					el("div", { className: "uc-banner-full" }, head),
+					rest ? el("pre", { className: "uc-pre" }, rest) : null,
+					!updateMsg.ok && lastResult && lastResult.detail && lastResult.detail !== head
+						? el("details", { className: "uc-det" },
+							el("summary", null, "pnpm 原始报错"),
+							el("pre", { className: "uc-pre" }, String(lastResult.detail)),
+						)
 						: null,
 				);
 			}
