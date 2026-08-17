@@ -20,6 +20,7 @@ const { spawn } = require('node:child_process');
 const { createRequire } = require('node:module');
 const { pathToFileURL } = require('node:url');
 const { runCheck, renderReport, findProfile } = require('./lib/check.js');
+const { classifyPnpmFailure } = require('./lib/pnpm-error.js');
 
 const NAME = 'dsh-update-checker';
 const API_PATH = '/dsh-update-checker/api';
@@ -57,16 +58,6 @@ function isLocalHost(host) {
   return h.indexOf('127.0.0.1') === 0 || h.indexOf('localhost') === 0 || h.indexOf('[::1]') === 0 || h.indexOf('::1') === 0;
 }
 
-/** Pull the first meaningful error line out of a noisy pnpm log. */
-function extractErr(text) {
-  if (!text) return '';
-  const lines = String(text).split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
-  if (lines.length === 0) return '';
-  const idx = lines.findIndex((l) => l.indexOf('ERR_') === 0 || l.indexOf('error') === 0 || l.indexOf('Error') === 0 || l.indexOf('ERROR') === 0);
-  if (idx >= 0) return lines.slice(idx, idx + 3).join(' | ').slice(0, 300);
-  return lines[0].slice(0, 200);
-}
-
 /** pnpm runs through a shell on Windows, so kill the whole tree, not just cmd.exe. */
 function killTree(child) {
   if (!child || child.exitCode !== null || child.killed) return;
@@ -84,26 +75,26 @@ function killTree(child) {
 /**
  * Load `defineTool` from the harness that is actually running.
  *
- * A `link:` install lives outside the profile, and Node resolves specifiers from
- * a file's real path, so the bare import only works for a package installed
- * inside the profile (github:/registry). Fall back to resolving from the
- * profile directory, which is the same file the runtime already imported, so
- * the ESM cache hands back one shared module instance either way.
+ * The profile is tried FIRST on purpose: a `link:` install resolves specifiers
+ * from its own real path, so a bare import can silently pick up a second copy
+ * of dsh-tools (a dev `node_modules/` beside this package) instead of the one
+ * the runtime imported. Resolving from the profile names the same file, so the
+ * ESM cache yields one shared module instance.
  */
 async function loadDefineTool() {
+  const profileDir = findProfile();
+  if (profileDir) {
+    try {
+      const req = createRequire(path.join(profileDir, 'package.json'));
+      const mod = await import(pathToFileURL(req.resolve('@deepseek-ai/dsh-tools')).href);
+      if (mod && typeof mod.defineTool === 'function') return mod.defineTool;
+    } catch (e) { /* fall through to the ordinary specifier */ }
+  }
   try {
     const mod = await import('@deepseek-ai/dsh-tools');
     if (mod && typeof mod.defineTool === 'function') return mod.defineTool;
   } catch (e) { /* linked install: resolve from the profile instead */ }
-  const profileDir = findProfile();
-  if (!profileDir) return null;
-  try {
-    const req = createRequire(path.join(profileDir, 'package.json'));
-    const mod = await import(pathToFileURL(req.resolve('@deepseek-ai/dsh-tools')).href);
-    if (mod && typeof mod.defineTool === 'function') return mod.defineTool;
-  } catch (e) {
-    console.error(NAME + ': could not load @deepseek-ai/dsh-tools; the settings page still works but dsh_check_updates is unavailable: ' + String((e && e.message) || e));
-  }
+  console.error(NAME + ': could not load @deepseek-ai/dsh-tools; the settings page still works but dsh_check_updates is unavailable');
   return null;
 }
 
@@ -243,10 +234,12 @@ async function apply(ctx) {
         return;
       }
       if (code !== 0) {
-        const detail = extractErr(err) || extractErr(out) || '未知错误';
+        const failure = classifyPnpmFailure({ stdout: out, stderr: err, code, name });
         finishUpdate(name, startedAt, {
           ok: false,
-          message: '更新失败（退出码 ' + String(code) + '）：' + detail + '。若是网络问题（github.com 连不上），网络恢复后重试',
+          kind: failure.kind,
+          detail: failure.detail,
+          message: failure.message,
         });
         return;
       }
