@@ -85,20 +85,39 @@ function killTree(child) {
  * of dsh-tools (a dev `node_modules/` beside this package) instead of the one
  * the runtime imported. Resolving from the profile names the same file, so the
  * ESM cache yields one shared module instance.
+ *
+ * Three strategies, because the answer depends on the profile's node linker:
+ * hoisted profiles expose dsh-tools at the top level, isolated ones expose only
+ * direct dependencies — so the last resort resolves it through a package that
+ * depends on it. Failing all three costs the model tool, not the settings page.
  */
 async function loadDefineTool() {
   const profileDir = findProfile();
+  const attempts = [];
   if (profileDir) {
+    const fromProfile = createRequire(path.join(profileDir, 'package.json'));
+    attempts.push(() => fromProfile.resolve('@deepseek-ai/dsh-tools'));
+    attempts.push(() => {
+      // Isolated linker: reach it through a package that depends on it.
+      for (const host of ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-agent']) {
+        try {
+          const viaHost = createRequire(fromProfile.resolve(host + '/package.json'));
+          return viaHost.resolve('@deepseek-ai/dsh-tools');
+        } catch (e) { /* try the next one */ }
+      }
+      throw new Error('no host package resolved dsh-tools');
+    });
+  }
+  for (const resolve of attempts) {
     try {
-      const req = createRequire(path.join(profileDir, 'package.json'));
-      const mod = await import(pathToFileURL(req.resolve('@deepseek-ai/dsh-tools')).href);
+      const mod = await import(pathToFileURL(resolve()).href);
       if (mod && typeof mod.defineTool === 'function') return mod.defineTool;
-    } catch (e) { /* fall through to the ordinary specifier */ }
+    } catch (e) { /* try the next strategy */ }
   }
   try {
     const mod = await import('@deepseek-ai/dsh-tools');
     if (mod && typeof mod.defineTool === 'function') return mod.defineTool;
-  } catch (e) { /* linked install: resolve from the profile instead */ }
+  } catch (e) { /* nothing left to try */ }
   console.error(NAME + ': could not load @deepseek-ai/dsh-tools; the settings page still works but dsh_check_updates is unavailable');
   return null;
 }
