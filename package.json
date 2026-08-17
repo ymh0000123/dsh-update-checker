@@ -1,20 +1,30 @@
 {
   "name": "dsh-update-checker",
-  "version": "1.1.0",
-  "private": true,
-  "description": "DSH 更新检测插件：检测本机 DSH/@deepseek-ai 包（npm 源）与 GitHub 源包是否有更新，在设置页给出详细表格，并支持一键更新 GitHub 依赖。",
+  "version": "1.2.0",
+  "description": "DeepSeek Harness plugin: detect updates for the installed DSH / @deepseek-ai npm packages and GitHub-sourced plugins, show them in a detailed settings page, and update GitHub dependencies with an explicit build-authorization step.",
   "keywords": [
+    "dsh-plugin",
     "deepseek-harness",
     "dsh",
+    "cordis",
+    "cordis-plugin",
     "plugin",
     "update",
+    "update-checker",
     "npm",
-    "github"
+    "github",
+    "pnpm",
+    "settings"
   ],
   "license": "MIT",
+  "author": "ymh0000123",
+  "homepage": "https://github.com/ymh0000123/dsh-update-checker#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ymh0000123/dsh-update-checker"
+    "url": "git+https://github.com/ymh0000123/dsh-update-checker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ymh0000123/dsh-update-checker/issues"
   },
   "main": "index.js",
   "scripts": {
@@ -30,7 +40,12 @@
   },
   "dsh": {
     "bundle": {
-      "patch": "./cordis.patch.yml"
+      "patch": "./cordis.patch.yml",
+      "order": {
+        "after": [
+          "@deepseek-ai/dsh-web-app"
+        ]
+      }
     },
     "client": {
       "platform": "web",
@@ -46,7 +61,8 @@
     "lib",
     "src",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"

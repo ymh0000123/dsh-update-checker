@@ -1,6 +1,33 @@
 # dsh-update-checker
 
-DSH 更新检测插件。检测本机安装的 **DSH / `@deepseek-ai` 包**（npm 源）以及 **GitHub 源包**是否有更新，在设置页给出详细表格，并支持 GitHub 依赖的**一键更新**。
+[![DSH plugin](https://img.shields.io/badge/DeepSeek%20Harness-plugin-blue)](https://github.com/topics/dsh-plugin)
+[![license](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
+[![tests](https://img.shields.io/badge/tests-25%20passing-brightgreen)](./test)
+
+**DeepSeek Harness 插件：一个页面看清所有更新。** 它检测本机装的 **DSH / `@deepseek-ai` npm 包**和**从 GitHub 装的插件**是否有新版本，在 **设置 → 更新检测** 里给出可筛选的详细表格，并支持 GitHub 依赖的**一键更新**——包括在网络受限、构建脚本被供应链策略拦住时，告诉你到底卡在哪、以及需要你批准什么。
+
+中文 | [English](#english)
+
+```bash
+dsh plugin --profile web add github:ymh0000123/dsh-update-checker
+```
+
+装完重启 `dsh web`，打开 **设置 → 更新检测**。
+
+## 亮点
+
+- **两类源都查**：npm 包对比 `latest` / `next` / 已发布最高版本；GitHub 包对比已安装 commit 与远程最新 commit，并识别**发布标签**（能说清"装的是 v0.1.24，目标是 v0.1.26"）。
+- **网络被封也能查**：优先用不受限流的 `git ls-remote`，连不上就自动回退 GitHub API（`github.com:443` 被阻断时仍能检测成功，来源在表格里标 `API`）。
+- **不骗人的失败提示**：pnpm 把成功提示和真正的错误写在同一条流里，本插件会先扔掉噪声再归类——是 git 通道不通、还是供应链策略拦了构建脚本、还是发布冷静期——并给出可直接粘贴的那一行配置。
+- **一键更新带显式授权**：需要执行第三方构建脚本时，先把「要写哪个文件、写哪一行、有什么副作用」摊开给你看，你点确认才写；不需要构建的包一行授权都不会留。
+- **后台任务**：检查与更新都不阻塞请求，离开页面也照常跑完，回来还能看到进度与结果。
+- **模型工具** `dsh_check_updates`：可以直接跟 Agent 说"检查有没有更新"。
+
+## 目录
+
+- [安装到 profile](#安装到-profile推荐) · [功能](#功能) · [检测口径](#检测口径) · [一键更新的两条路径](#一键更新的两条路径) · [测试](#测试) · [已知坑](#已知坑都已修留档)
+
+## 运行形态
 
 有两种运行形态，功能一致：
 
@@ -12,11 +39,11 @@ DSH 更新检测插件。检测本机安装的 **DSH / `@deepseek-ai` 包**（np
 ## 安装到 profile（推荐）
 
 ```bash
-# 本地开发（link，改完重启 dsh web 即生效）
-dsh plugin --profile web add link:E:/dsh/1/dsh-update-checker
-
-# 或从 GitHub 安装
+# 从 GitHub 安装
 dsh plugin --profile web add github:ymh0000123/dsh-update-checker
+
+# 本地开发（link，改完重启 dsh web 即生效）
+dsh plugin --profile web add link:/path/to/dsh-update-checker
 ```
 
 该命令会把包写进 profile 的 `dependencies`，并根据本包的 `dsh.bundle.patch` 声明把 `dsh-update-checker` 追加到 `dsh.profile.bundles`。profile 启动时合并 `cordis.patch.yml` 里那一行 `insert`，无需手工改 profile 文件。
@@ -135,3 +162,28 @@ node src/check-dsh-updates.cjs   # 独立脚本，输出 JSON 报告
 - GitHub 检测优先用 `git`，无 git 或连不上时回退 GitHub API。
 - 一键更新需要 `pnpm`。
 - host 半通过 `@deepseek-ai/dsh-tools` 注册模型工具；`link:` 安装时该包不在本包的解析路径上，`index.js` 会改从 profile 目录解析（拿到的是运行时同一个模块实例）。
+
+## English
+
+**A DeepSeek Harness plugin that puts every pending update on one page.**
+
+It checks the installed **DSH / `@deepseek-ai` npm packages** against the registry (`latest`, `next`, highest published version) and every **GitHub-sourced plugin** against its remote, then renders a filterable table under **Settings → 更新检测 (Update check)** — with one-click updates for GitHub dependencies.
+
+```bash
+dsh plugin --profile web add github:ymh0000123/dsh-update-checker
+```
+
+Restart `dsh web` afterwards, then open **Settings → 更新检测**.
+
+What makes it different:
+
+- **Works on a restricted network.** GitHub commits are read with `git ls-remote` (no rate limit) and fall back to the GitHub API automatically, so detection still succeeds when `github.com:443` is blocked. The fallback is labelled `API` in the table; a rate-limited response is reported as its own state, and `GITHUB_TOKEN` / `GH_TOKEN` is used when the environment provides one.
+- **Release tags are understood.** One `git ls-remote HEAD refs/tags/*` also reveals which tag a commit is, so a dependency pinned to a release reads as "installed v0.1.24, target v0.1.26" instead of looking permanently outdated because the branch moved.
+- **Failures name the real cause.** pnpm writes success chatter and its actual error to the same stream; this plugin strips the noise and classifies what is left — blocked git channel, a build script refused by the profile's supply-chain policy (`allowBuilds`), a release-age hold — and quotes the exact line you would need.
+- **Updates escalate in the open.** When a package must run its own build script, the panel first shows which file it would edit, the exact allowlist line, what it replaces and the side effects; nothing is written until you confirm. A package that needs no build never gets a policy grant, a grant is pruned only after the install succeeds, and it is reverted if the install fails.
+- **Everything runs in the background.** No request blocks on a multi-minute pnpm run, so you can leave the page and come back to the progress and the result.
+- **Model tool** `dsh_check_updates`, so you can just ask the agent whether anything needs updating.
+
+Requires Node.js ≥ 18, `pnpm` for updating, and `git` (optional — the API fallback covers its absence).
+
+MIT licensed. Issues and PRs welcome.
