@@ -14,33 +14,55 @@ const { Readable } = require('node:stream');
 
 const plugin = require('../index.js');
 
-/** Minimal ctx: get() for services, effect() running the callback eagerly. */
-function stubCtx() {
+/**
+ * Minimal ctx: get() for services, effect() running the callback eagerly, and
+ * inject() mirroring cordis. `offer` selects which services exist, so the
+ * tui/headless composition (no webServer) can be exercised too.
+ */
+function stubCtx(offer) {
   const registered = { tools: [], routes: [], disposers: [] };
+  const wanted = offer === undefined ? ['tools', 'webServer'] : offer;
+  const services = {};
+  if (wanted.indexOf('tools') >= 0) {
+    services.tools = {
+      register(tool) {
+        registered.tools.push(tool);
+        return () => { registered.tools.splice(registered.tools.indexOf(tool), 1); };
+      },
+    };
+  }
+  if (wanted.indexOf('webServer') >= 0) {
+    services.webServer = {
+      register(route) {
+        registered.routes.push(route);
+        return () => { registered.routes.splice(registered.routes.indexOf(route), 1); };
+      },
+    };
+  }
   const ctx = {
     get(name) {
-      if (name === 'tools') {
-        return {
-          register(tool) {
-            registered.tools.push(tool);
-            return () => { registered.tools.splice(registered.tools.indexOf(tool), 1); };
-          },
-        };
-      }
-      if (name === 'webServer') {
-        return {
-          register(route) {
-            registered.routes.push(route);
-            return () => { registered.routes.splice(registered.routes.indexOf(route), 1); };
-          },
-        };
-      }
-      return undefined;
+      return services[name];
     },
     effect(callback) {
       const disposer = callback();
       if (typeof disposer === 'function') registered.disposers.push(disposer);
       return () => {};
+    },
+    // Mirror cordis: the callback runs only once every declared dependency is
+    // available, and it receives a scope exposing them.
+    inject(deps, callback) {
+      if (!deps.every((dep) => services[dep] !== undefined)) return {};
+      const scope = {
+        get(name) { return services[name]; },
+        effect(cb) {
+          const disposer = cb();
+          if (typeof disposer === 'function') registered.disposers.push(disposer);
+          return () => {};
+        },
+      };
+      for (const dep of deps) scope[dep] = services[dep];
+      callback(scope);
+      return {};
     },
   };
   return { ctx, registered };
@@ -73,7 +95,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 test('exports a cordis plugin row', () => {
   assert.equal(plugin.name, 'dsh-update-checker');
   assert.equal(typeof plugin.apply, 'function');
-  assert.deepEqual(plugin.inject, ['tools', 'webServer']);
+  assert.equal(plugin.inject, undefined, 'no hard dependency: each half mounts through its own ctx.inject');
+});
+
+test('on a profile without a web server, the tool still registers', async () => {
+  // tui / headless: the row used to wait for webServer forever and contribute
+  // nothing at all, not even the model tool.
+  const { ctx, registered } = stubCtx(['tools']);
+  await plugin.apply(ctx);
+  assert.equal(registered.tools.length, 1, 'the model tool must not depend on the web server');
+  assert.equal(registered.tools[0].name, 'dsh_check_updates');
+  assert.equal(registered.routes.length, 0, 'no web server, no route');
+  for (const dispose of registered.disposers) dispose();
+});
+
+test('with neither service, mounting is still harmless', async () => {
+  const { ctx, registered } = stubCtx([]);
+  await plugin.apply(ctx);
+  assert.equal(registered.tools.length, 0);
+  assert.equal(registered.routes.length, 0);
+  for (const dispose of registered.disposers) dispose();
 });
 
 test('mounts, serves the local API and disposes', async () => {
