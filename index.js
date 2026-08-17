@@ -4,7 +4,7 @@
  *
  * Mounted by the loader when the package is installed into a profile:
  *
- *   dsh plugin --profile web add link:E:/dsh/1/dsh-update-checker
+ *   dsh plugin --profile web add github:ymh0000123/dsh-update-checker
  *
  * `dsh.bundle.patch` (cordis.patch.yml) inserts this row; the loader requires
  * this main entry and uses its `name` + `apply` exports. The browser half
@@ -14,6 +14,10 @@
  * Both the check and the update are fire-and-forget background jobs whose state
  * the page polls: a single request must never block for minutes, which is what
  * made the dynamic variant fail with "Failed to fetch" on slow pnpm runs.
+ *
+ * The row declares no hard dependency: the model tool and the browser route each
+ * mount through their own `ctx.inject`, so a profile with no web server still
+ * gets the tool instead of a row that waits forever and contributes nothing.
  */
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -418,13 +422,12 @@ async function apply(ctx) {
     return { ok: false, error: 'unknown action "' + action + '"' };
   };
 
-  // ---- model tool --------------------------------------------------------
+  // ---- model tool (mounts when a tool registry exists) -------------------
 
-  const tools = ctx.get('tools');
-  if (tools !== undefined) {
-    const defineTool = await loadDefineTool();
-    if (defineTool !== null) {
-      ctx.effect(() => tools.register(defineTool({
+  const defineTool = await loadDefineTool();
+  if (defineTool !== null) {
+    ctx.inject(['tools'], (scope) => {
+      scope.effect(() => scope.tools.register(defineTool({
         name: 'dsh_check_updates',
         description: '检查本机安装的 DSH / @deepseek-ai 各包（npm 源）及 GitHub 源包相对仓库的更新情况。npm 部分返回每个包的本机版本(local)、稳定版标签(latest)、预发布标签(next)、已发布最高版本(maxPublished)、是否有更新(hasUpdate)；GitHub 部分返回仓库(repo)、已安装 commit(installedCommit)、远程默认分支最新 commit(latestCommit)、是否有更新(hasUpdate)。附 DSH 发行版号(dshRelease)与汇总(summary / githubSummary)。',
         parameters: {},
@@ -436,14 +439,13 @@ async function apply(ctx) {
           return awaitCheck(true);
         },
       })));
-    }
+    });
   }
 
-  // ---- browser JSON route -----------------------------------------------
+  // ---- browser JSON route (mounts when a web server exists) -------------
 
-  const webServer = ctx.get('webServer');
-  if (webServer !== undefined) {
-    ctx.effect(() => webServer.register({
+  ctx.inject(['webServer'], (scope) => {
+    scope.effect(() => scope.webServer.register({
       kind: 'prefix',
       path: API_PATH,
       handler: async (req, res) => {
@@ -462,7 +464,7 @@ async function apply(ctx) {
         }
       },
     }));
-  }
+  });
 
   // Never leave a pnpm run (or its timer) behind when this row unmounts.
   ctx.effect(() => () => {
@@ -483,6 +485,5 @@ async function apply(ctx) {
 
 module.exports = {
   name: NAME,
-  inject: ['tools', 'webServer'],
   apply,
 };

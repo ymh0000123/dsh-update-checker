@@ -3,8 +3,8 @@
 # This file is the `dsh.bundle.patch` layer of the package. Installing through
 # the official CLI —
 #
-#   dsh plugin --profile web add link:E:/dsh/1/dsh-update-checker
 #   dsh plugin --profile web add github:ymh0000123/dsh-update-checker
+#   dsh plugin --profile web add link:/path/to/dsh-update-checker
 #
 # — reconciles `dsh.profile.bundles` against the installed packages and, seeing
 # this declaration, appends `dsh-update-checker` to the bundle stack. Profile

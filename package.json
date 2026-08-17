@@ -1,6 +1,6 @@
 {
   "name": "dsh-update-checker",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "DeepSeek Harness plugin: detect updates for the installed DSH / @deepseek-ai npm packages and GitHub-sourced plugins, show them in a detailed settings page, and update GitHub dependencies with an explicit build-authorization step.",
   "keywords": [
     "dsh-plugin",

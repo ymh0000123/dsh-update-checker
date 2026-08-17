@@ -134,6 +134,7 @@ dsh plugin --profile web remove dsh-update-checker
 | `test/host-mount.test.js` | 用桩 ctx 真实挂载 host 半并跑通本地 API |
 | `test/failure-report.test.js` | 用真实 pnpm 输出锁死错误归类与 lockfile `importers` 口径 |
 | `test/workspace-policy.test.js` | 锁死唯一会写入 profile 的那处改动 |
+| `test/portability.test.js` | 锁死「在别人机器上」的假设：`DSH_HOME`、自身所属 profile、缺 pnpm、出货文件不含本机路径 |
 
 ## 测试
 
