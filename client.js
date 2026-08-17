@@ -63,6 +63,8 @@ window.__ModuleLoader__.load({
 .uc-arrow { opacity: 0.45; margin: 0 5px; }
 .uc-dim { opacity: 0.42; }
 .uc-tag { margin-left: 6px; font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary); vertical-align: 1px; }
+.uc-tag-ok { color: var(--dsw-alias-state-success-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 45%, transparent); }
+.uc-tag-warn { color: var(--dsw-alias-state-warn-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 55%, transparent); }
 .uc-badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 11px; border: 1px solid transparent; white-space: nowrap; }
 .uc-b-upd { color: var(--dsw-alias-state-error-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 42%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 9%, transparent); }
 .uc-b-ok { color: var(--dsw-alias-state-success-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 38%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent); }
@@ -470,13 +472,17 @@ window.__ModuleLoader__.load({
 					el("td", { className: "uc-name" },
 						x.name,
 						x.kind === "link-git" ? el("span", { className: "uc-tag", title: "本地 link 安装，需手动 git pull" }, "link") : null,
+						x.pinned ? el("span", { className: "uc-tag", title: "该依赖被固定在指定 commit/标签（spec: " + String(x.specifier || "") + "）。这里的「可更新」只表示默认分支 HEAD 与它不同；更新会把它移到分支最新提交。" }, "固定") : null,
+						x.installedTag ? el("span", { className: "uc-tag uc-tag-ok", title: "已安装的 commit 正好是发布标签 " + x.installedTag }, x.installedTag) : null,
 					),
 					el("td", { className: "uc-repo" }, val(x.repo)),
 					el("td", { className: "uc-ver" },
 						x.installedCommit ? el("span", { className: "uc-code", title: String(x.installedCommit) }, shortSha(x.installedCommit)) : dash(),
 						x.hasUpdate && x.latestCommit ? el("span", { className: "uc-arrow" }, "→") : null,
 						x.hasUpdate && x.latestCommit ? el("span", { className: "uc-code uc-ver-new", title: String(x.latestCommit) }, shortSha(x.latestCommit)) : null,
+						x.hasUpdate && x.latestTag ? el("span", { className: "uc-tag", title: "目标 commit 是发布标签 " + x.latestTag }, x.latestTag) : null,
 						x.via === "api" ? el("span", { className: "uc-tag", title: "经 GitHub API 获取（github.com 被阻断时自动回退）" }, "API") : null,
+						x.rateLimited ? el("span", { className: "uc-tag uc-tag-warn", title: "GitHub API 限流：未认证为每小时 60 次；设置 GITHUB_TOKEN 环境变量可提升到 5000 次。" }, "限流") : null,
 					),
 					el("td", null, el(Badge, { status: gStatusOf(x), title: x.error ? String(x.error) : "" })),
 					el("td", { className: "uc-cell-r" }, actionEl),
@@ -561,18 +567,33 @@ window.__ModuleLoader__.load({
 								" —— 固定 commit 的 codeload tarball，不经过被封锁的 github.com git 通道。",
 							),
 							el("li", null,
-								"仅当 pnpm 因构建脚本被拦时，才往 ",
+								"仅当 pnpm 因构建脚本被拦（或静默跳过构建）时，才往 ",
 								el("span", { className: "uc-code" }, String(grant.file)),
-								" 的 allowBuilds ",
-								grant.replaces && grant.replaces.length > 0 ? "用这一行替换该包的旧授权" : "写入这一行",
-								"（不需要构建的包不会写入任何授权）：",
+								" 的 allowBuilds 写入这一行（只动这个 commit 的条目，已安装 commit 的授权保持不变；不需要构建的包不会写入任何授权）：",
 								el("pre", { className: "uc-pre" }, String(grant.line)),
 								grant.replaces && grant.replaces.length > 0
-									? el("div", { className: "uc-dim" }, "将被替换：" + grant.replaces.join(" / "))
+									? el("div", { className: "uc-dim" }, "将替换同一 commit 的待决条目：" + grant.replaces.join(" / "))
 									: null,
 								grant.alreadyAllowed ? el("div", { className: "uc-dim" }, "（该 commit 已在白名单中，无需改动）") : null,
 							),
+							el("li", null,
+								"安装成功后，清理该包指向其他 commit 的旧授权",
+								grant.prunesAfterSuccess && grant.prunesAfterSuccess.length > 0
+									? el("span", null, "（" + grant.prunesAfterSuccess.length + " 条）")
+									: null,
+								"；安装失败则把上一步的写入原样还原。",
+							),
 						),
+						grant.pinned
+							? el("div", { className: "uc-grant-warn" },
+								"注意：该依赖是「固定」安装",
+								grant.installedTag ? el("span", null, "（当前正好在发布标签 " + grant.installedTag + " 上）") : null,
+								"，本次会把它移到目标 commit ",
+								el("span", { className: "uc-code" }, String(grant.commit || "").slice(0, 7)),
+								grant.latestTag ? el("span", null, "（标签 " + grant.latestTag + "）") : el("span", null, "（默认分支最新提交，不一定是发布版本）"),
+								"。",
+							)
+							: null,
 						el("div", { className: "uc-grant-warn" },
 							"副作用：package.json 中该依赖会固定为这个 commit。github.com 恢复后可用 ",
 							el("span", { className: "uc-code" }, "dsh plugin --profile web add github:" + String(grant.repo)),

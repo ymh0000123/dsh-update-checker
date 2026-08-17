@@ -57,7 +57,10 @@ dsh plugin --profile web remove dsh-update-checker
 
 - npm 包“有更新” = npm 上存在比本机版本更高的已发布版本（`maxPublished > local`）。DSH 当前发行渠道是 `next`，所以多数包状态是**预发布**而非“已最新”。
 - GitHub 包“有更新” = 远程默认分支最新 commit ≠ 已安装 commit。
-- 结果缓存 5 分钟；「重新检测」强制绕过缓存。
+- **`固定` 标签**：依赖 spec 带 `#ref` 或本身就是 codeload tarball URL（例如 `dshmarket`）时，说明它被刻意钉在某个 commit/标签上。此时「可更新」只表示**默认分支 HEAD 与它不同**，更新会把它移到分支最新提交——不一定是发布版本。
+- **标签识别**：一次 `git ls-remote HEAD refs/tags/*` 同时拿到 HEAD 和全部标签，所以能显示"已安装的 commit 正好是 v0.1.24"、"目标 commit 是 v0.1.26"。少了这一步，一个钉在发布标签上的包会因为分支在动而**永远显示可更新**。
+- **API 限流**：GitHub API 未认证是每小时 60 次，几轮重新检测就会耗尽。所以优先用不受限流的 `git ls-remote`，只在 git 不可用时回退 API；限流会单独标 `限流`（不是笼统的失败），并且若环境里有 `GITHUB_TOKEN` / `GH_TOKEN` 会自动带上（额度 5000/小时，插件不存储也不写入任何凭据）。
+- 结果缓存 5 分钟；「重新检测」强制绕过缓存；**任何一次更新结束后（无论成败）都会自动重新检测**，因为 pnpm 可能已经改写了 `package.json` / `pnpm-lock.yaml`。
 
 ## 一键更新的两条路径
 
@@ -75,9 +78,15 @@ dsh plugin --profile web remove dsh-update-checker
 **授权构建并更新**是上面两种失败时才出现的显式升级按钮。它先把要做的事摊开给你看（目标 commit、要写入的文件、精确的那一行、副作用），确认后按顺序：
 
 1. `pnpm add <包名>@https://codeload.github.com/<owner>/<repo>/tar.gz/<commit>` —— 固定 commit 的 codeload tarball，**完全不经过 git 通道**，因此 github.com 被封时也能装；
-2. **仅当** pnpm 因构建脚本被拦，才往 `pnpm-workspace.yaml` 的 `allowBuilds` 写入（或替换该包的旧授权行）那一行，然后重装一次。不需要构建的包不会留下任何授权。
+2. **仅当** pnpm 因构建脚本被拦（`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`）或静默跳过构建（`Ignored build scripts`），才往 `pnpm-workspace.yaml` 的 `allowBuilds` 写入那一行，然后重装一次。不需要构建的包不会留下任何授权。
 
-为什么必须有这一步：像 `dsh-better-sidebar` 这样的包不把 `lib/` 提交进仓库（`prepare: tsdown` 现场构建），而 `allowBuilds` 按「包名@精确 tarball」授权，所以**每换一个 commit 都要重新批准一次执行第三方构建脚本**——这道闸门的意义就是由人批准，插件不会悄悄绕过它。授权写入前会留一份 `pnpm-workspace.yaml.bak`。
+写入顺序是刻意的，避免把一个能用的安装弄坏：
+
+- 授权时**只动目标 commit 那一个键**，已安装 commit 的授权保持不变——否则一旦新安装失败，正在用的那个版本就失去了重建能力；
+- **安装成功后**才清理该包指向其他 commit 的旧授权（不再安装的 commit 留着授权等于悄悄放宽信任）；
+- **安装失败则原样还原**上一步的写入（包括还原 pnpm 自己写的 `set this to true or false` 占位符）。
+
+为什么必须有这一步：像 `dsh-better-sidebar`、`dshmarket` 这样的包不把编译产物提交进仓库（`prepare` 现场构建），而 `allowBuilds` 按「包名@精确 tarball」授权，所以**每换一个 commit 都要重新批准一次执行第三方构建脚本**——这道闸门的意义就是由人批准，插件不会悄悄绕过它。授权写入前会留一份 `pnpm-workspace.yaml.bak`。
 
 副作用：走过授权路径后，`package.json` 里该依赖会固定为那个 commit。github.com 恢复后可用 `dsh plugin --profile web add github:<owner>/<repo>` 还原为跟随最新。
 

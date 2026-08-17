@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { planAuthorization, authorizeBuild, allowKey, tarballUrl } = require('../lib/workspace-policy.js');
+const { planAuthorization, authorizeBuild, pruneOtherGrants, revertGrant, allowKey, tarballUrl } = require('../lib/workspace-policy.js');
 
 const OLD = 'f842fa002994a4a25dd6a6c8795486ccae5c28f7';
 const NEW = 'c923fc57b1a64b898d8b6d1bcc76cfb941831255';
@@ -54,23 +54,29 @@ test('planning reports the exact line and changes nothing', () => {
   assert.equal(plan.ok, true);
   assert.equal(plan.key, NAME + '@https://codeload.github.com/' + REPO + '/tar.gz/' + NEW);
   assert.equal(plan.alreadyAllowed, false);
-  assert.deepEqual(plan.replaces, [NAME + '@' + tarballUrl(REPO, OLD) + ': true']);
+  assert.deepEqual(plan.replaces, [], 'nothing exists for THIS commit yet');
+  assert.deepEqual(plan.prunesAfterSuccess, [NAME + '@' + tarballUrl(REPO, OLD) + ': true'],
+    'the installed commit grant is pruned only after a successful install');
   assert.equal(read(dir), before, 'planning must not touch the file');
   cleanup(dir);
 });
 
-test('granting replaces the package stale entry in place and keeps everything else', () => {
+test('granting adds only this commit and KEEPS the installed commit grant', () => {
+  // The installed commit must stay grantable while the new install is merely
+  // being attempted: pruning first means a failed update leaves the working
+  // package unable to rebuild.
   const dir = makeProfile(FULL_BLOCK);
   const result = authorizeBuild({ profileDir: dir, name: NAME, repo: REPO, sha: NEW });
   assert.equal(result.ok, true);
   assert.equal(result.changed, true);
   assert.equal(result.added, allowKey(NAME, REPO, NEW) + ': true');
+  assert.equal(result.previous.existed, false);
 
   const text = read(dir);
   const lines = text.split('\n');
   assert.ok(text.includes('  ' + allowKey(NAME, REPO, NEW) + ': true'), 'new grant missing');
-  assert.equal(text.includes(OLD), false, 'stale grant must be gone');
-  assert.equal(lines.filter((l) => l.includes(NAME + '@')).length, 1, 'exactly one grant for the package');
+  assert.ok(text.includes('  ' + allowKey(NAME, REPO, OLD) + ': true'), 'installed grant must survive');
+  assert.equal(lines.filter((l) => l.includes(NAME + '@')).length, 2, 'both commits granted during the attempt');
 
   // The rest of the policy file is untouched.
   assert.ok(text.includes('nodeLinker: hoisted'));
@@ -80,11 +86,53 @@ test('granting replaces the package stale entry in place and keeps everything el
   assert.ok(text.includes('  koffi: true'));
   assert.ok(text.includes('  node-pty: true'));
   assert.ok(text.includes('  protobufjs: true'));
-  assert.equal(lines.length, FULL_BLOCK.length + 8, 'no lines added or dropped');
+  assert.equal(lines.length, FULL_BLOCK.length + 9, 'exactly one line added');
 
   // A rollback copy exists.
   assert.ok(fs.existsSync(path.join(dir, 'pnpm-workspace.yaml.bak')));
   assert.ok(read(dir) !== fs.readFileSync(path.join(dir, 'pnpm-workspace.yaml.bak'), 'utf8'));
+  cleanup(dir);
+});
+
+test('pruning after success drops the other commits and keeps the installed one', () => {
+  const dir = makeProfile(FULL_BLOCK);
+  authorizeBuild({ profileDir: dir, name: NAME, repo: REPO, sha: NEW });
+  const prune = pruneOtherGrants({ profileDir: dir, name: NAME, keepSha: NEW });
+  assert.equal(prune.ok, true);
+  assert.equal(prune.changed, true);
+  assert.deepEqual(prune.removed, [allowKey(NAME, REPO, OLD) + ': true']);
+
+  const lines = read(dir).split('\n').filter((l) => l.includes(NAME + '@'));
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].trim(), allowKey(NAME, REPO, NEW) + ': true');
+  assert.ok(read(dir).includes('  koffi: true'), 'other packages untouched');
+
+  const again = pruneOtherGrants({ profileDir: dir, name: NAME, keepSha: NEW });
+  assert.equal(again.changed, false, 'pruning twice is a no-op');
+  cleanup(dir);
+});
+
+test('reverting a failed attempt restores the file exactly', () => {
+  const dir = makeProfile(FULL_BLOCK);
+  const before = read(dir);
+  const grant = authorizeBuild({ profileDir: dir, name: NAME, repo: REPO, sha: NEW });
+  assert.equal(grant.changed, true);
+  const revert = revertGrant({ profileDir: dir, name: NAME, repo: REPO, sha: NEW, previous: grant.previous });
+  assert.equal(revert.ok, true);
+  assert.equal(read(dir), before, 'a failed authorized update must leave no trace');
+  cleanup(dir);
+});
+
+test('reverting restores a placeholder pnpm had written itself', () => {
+  const placeholder = '  ' + allowKey(NAME, REPO, NEW) + ': set this to true or false';
+  const dir = makeProfile(['allowBuilds:', '  koffi: true', placeholder]);
+  const before = read(dir);
+  const grant = authorizeBuild({ profileDir: dir, name: NAME, repo: REPO, sha: NEW });
+  assert.equal(grant.changed, true);
+  assert.equal(grant.previous.existed, true);
+  assert.ok(read(dir).includes('  ' + allowKey(NAME, REPO, NEW) + ': true'));
+  revertGrant({ profileDir: dir, name: NAME, repo: REPO, sha: NEW, previous: grant.previous });
+  assert.equal(read(dir), before, 'the placeholder must come back verbatim');
   cleanup(dir);
 });
 

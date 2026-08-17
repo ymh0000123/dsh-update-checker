@@ -21,7 +21,7 @@ const { createRequire } = require('node:module');
 const { pathToFileURL } = require('node:url');
 const { runCheck, renderReport, findProfile } = require('./lib/check.js');
 const { classifyPnpmFailure } = require('./lib/pnpm-error.js');
-const { planAuthorization, authorizeBuild } = require('./lib/workspace-policy.js');
+const { planAuthorization, authorizeBuild, pruneOtherGrants, revertGrant } = require('./lib/workspace-policy.js');
 
 const NAME = 'dsh-update-checker';
 const API_PATH = '/dsh-update-checker/api';
@@ -163,6 +163,12 @@ async function apply(ctx) {
       clearTimeout(updateTimer);
       updateTimer = null;
     }
+    // pnpm may have rewritten package.json and pnpm-lock.yaml whatever the
+    // outcome, so the cached report is stale the moment an update ends. Re-check
+    // in the background rather than showing commits that no longer match the
+    // profile (which is exactly how a report ended up claiming a package was
+    // installed at a commit the lockfile had never recorded).
+    startCheck(true);
   };
 
   /** Describe the supply-chain grant an authorized update would write. */
@@ -188,6 +194,10 @@ async function apply(ctx) {
       tarball: plan.tarball,
       alreadyAllowed: plan.alreadyAllowed,
       replaces: plan.replaces,
+      prunesAfterSuccess: plan.prunesAfterSuccess,
+      pinned: !!gpkg.pinned,
+      installedTag: gpkg.installedTag || null,
+      latestTag: gpkg.latestTag || null,
       spec: name + '@' + plan.tarball,
     };
   };
@@ -280,26 +290,35 @@ async function apply(ctx) {
 
     (async () => {
       const tarball = gpkg.latestCommit ? 'https://codeload.github.com/' + gpkg.repo + '/tar.gz/' + gpkg.latestCommit : null;
-      let granted = false;
+      let grant = null;
       let attempt = authorize === true
         ? await runPnpm(['add', name + '@' + tarball])
         : await runPnpm(['update', name]);
 
-      // The one place a policy grant is written: pnpm just said this commit is
-      // not allowed to build, and the user already confirmed that exact line.
+      // The one place a policy grant is written: pnpm just refused (or silently
+      // skipped) this commit's build, and the user already confirmed that exact
+      // line. Only THIS commit's key is touched — the installed commit keeps its
+      // own grant until the new install actually succeeds.
       if (authorize === true && !updateState.cancelled && attempt.code !== 0 && attempt.spawnError === undefined) {
         const failure = classifyPnpmFailure({ stdout: attempt.out, stderr: attempt.err, code: attempt.code, name });
         if (failure.kind === 'allow-builds' || failure.kind === 'ignored-build-scripts') {
-          const grant = authorizeBuild({ profileDir, name, repo: gpkg.repo, sha: gpkg.latestCommit });
+          grant = authorizeBuild({ profileDir, name, repo: gpkg.repo, sha: gpkg.latestCommit });
           if (!grant.ok) {
             finishUpdate(name, startedAt, { ok: false, kind: 'allow-builds', message: grant.error || '写入 allowBuilds 失败' });
             return;
           }
-          granted = true;
           updateState.authorized = true;
           updateState.line = '已授权构建，正在重新安装…';
           attempt = await runPnpm(['add', name + '@' + tarball]);
         }
+      }
+
+      const failed = updateState.cancelled || attempt.spawnError !== undefined || attempt.code !== 0;
+
+      // A failed attempt must not leave a grant for a commit that is not
+      // installed, and must never have taken the installed commit's grant away.
+      if (failed && grant !== null && grant.changed) {
+        revertGrant({ profileDir, name, repo: gpkg.repo, sha: gpkg.latestCommit, previous: grant.previous });
       }
 
       if (updateState.cancelled) {
@@ -325,6 +344,13 @@ async function apply(ctx) {
         return;
       }
 
+      // Installed: now the older commits' grants are the ones that are stale.
+      let pruned = [];
+      if (grant !== null && gpkg.latestCommit) {
+        const prune = pruneOtherGrants({ profileDir, name, keepSha: gpkg.latestCommit });
+        if (prune.ok) pruned = prune.removed;
+      }
+
       // Keep the cached report consistent so the row stops offering the update.
       if (gpkg.latestCommit) {
         gpkg.installedCommit = gpkg.latestCommit;
@@ -340,12 +366,13 @@ async function apply(ctx) {
       if (authorize !== true) {
         message = '已将 ' + name + ' 更新到最新 commit（重启 DSH 后完全生效）';
       } else {
-        message = (granted ? '已授权构建并把 ' : '已把 ') + name + ' 更新到 ' + short
+        message = (grant !== null ? '已授权构建并把 ' : '已把 ') + name + ' 更新到 ' + short
           + '（重启 DSH 后完全生效）。该依赖现已固定为此 commit；github.com 的 git 通道恢复后可用 '
           + 'dsh plugin --profile web add github:' + gpkg.repo + ' 还原为跟随最新。'
-          + (granted ? '' : ' 该包无需构建脚本，因此没有写入任何 allowBuilds 授权。');
+          + (grant === null ? ' 该包无需构建脚本，因此没有写入任何 allowBuilds 授权。' : '')
+          + (pruned.length > 0 ? ' 已清理旧 commit 的授权 ' + pruned.length + ' 条。' : '');
       }
-      finishUpdate(name, startedAt, { ok: true, authorized: granted, pinned: authorize === true, message });
+      finishUpdate(name, startedAt, { ok: true, authorized: grant !== null, pinned: authorize === true, message });
     })();
 
     return { ok: true, started: true, name };
