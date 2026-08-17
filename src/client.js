@@ -1,8 +1,8 @@
-// Client half of the "DSH 更新检测" dynamic Cordis plugin (updt-1 / pkg-9).
-// This is the exact `code.client` body, wrapped as an ES module default export.
-// To load it as a dynamic plugin via cordis_define, use the function body
-// (the part inside `export default function () { ... }`) as code.client.
-export default function () {
+// Client half of the "DSH 更新检测" DYNAMIC Cordis plugin (cordis_define code.client).
+// Superseded for normal use by the INSTALLED browser bundle (../client.js);
+// kept for dynamic iteration. Exported as a CommonJS function whose BODY is what
+// cordis_define takes as `code.client`. Snapshot of the pre-1.1 dynamic iteration.
+module.exports = function () {
 function UpdateChecker(props) {
   const timer = props && props.timer
   const [state, setState] = React.useState({ phase: 'loading', report: null, error: null })

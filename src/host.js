@@ -1,9 +1,9 @@
-// Host half of the "DSH 更新检测" dynamic Cordis plugin (updt-1 / pkg-7).
-// This is the exact `code.host` body, wrapped as an ES module default export
-// so it can live in a normal package repo.
-// To load it as a dynamic plugin via cordis_define, use the function body
-// (the part inside `export default function () { ... }`) as code.host.
-export default function () {
+// Host half of the "DSH 更新检测" DYNAMIC Cordis plugin (cordis_define code.host).
+// Superseded for normal use by the INSTALLED host half (../index.js); kept so the
+// plugin can still be iterated as a dynamic plugin without restarting DSH.
+// Exported as a CommonJS function whose BODY is what cordis_define takes as
+// `code.host`. Snapshot of the pre-1.1 dynamic iteration.
+module.exports = function () {
 const SCRIPT = String.raw`
 const os = require('node:os');
 const fs = require('node:fs');

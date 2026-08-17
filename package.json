@@ -1,13 +1,75 @@
 {
   "name": "dsh-update-checker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
-  "type": "module",
-  "description": "DSH 更新检测动态插件：检测本机 DSH/@deepseek-ai 包（npm 源）与 GitHub 源包是否有更新，并支持一键更新 GitHub 依赖。",
-  "main": "src/host.js",
-  "exports": {
-    ".": "./src/host.js",
-    "./client": "./src/client.js"
+  "description": "DSH 更新检测插件：检测本机 DSH/@deepseek-ai 包（npm 源）与 GitHub 源包是否有更新，在设置页给出详细表格，并支持一键更新 GitHub 依赖。",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "update",
+    "npm",
+    "github"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ymh0000123/dsh-update-checker"
   },
-  "license": "MIT"
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./check": "./lib/check.js",
+    "./host.body": "./src/host.js",
+    "./client.body": "./src/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib",
+    "src",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-runtime": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-slots": {
+      "optional": true
+    }
+  }
 }
